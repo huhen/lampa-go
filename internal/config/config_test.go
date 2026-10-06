@@ -66,6 +66,26 @@ log:
 	}
 }
 
+func TestLoadEmptyFile(t *testing.T) {
+	cases := map[string]string{
+		"empty":         "",
+		"comments-only": "# just a comment\n",
+	}
+	for name, body := range cases {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("%s: Load: %v", name, err)
+		}
+		if cfg.Server.Listen != ":8080" {
+			t.Errorf("%s: listen = %q, want :8080", name, cfg.Server.Listen)
+		}
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
 		t.Fatal("expected error for missing file")

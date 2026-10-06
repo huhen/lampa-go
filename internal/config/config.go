@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -122,7 +123,8 @@ func Load(path string) (Config, error) {
 		// Strict decoding: typos like "staticdir" must fail, not be ignored.
 		dec := yaml.NewDecoder(bytes.NewReader(data))
 		dec.KnownFields(true)
-		if err := dec.Decode(&cfg); err != nil {
+		// An empty or comments-only file yields io.EOF; defaults must survive.
+		if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 			return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 		}
 	}
