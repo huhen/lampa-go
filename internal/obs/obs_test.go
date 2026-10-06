@@ -44,19 +44,30 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestMultiHandlerFanOut(t *testing.T) {
-	var a, b bytes.Buffer
+	var a, b, c bytes.Buffer
 	ha := slog.NewTextHandler(&a, &slog.HandlerOptions{Level: slog.LevelInfo})
 	hb := slog.NewJSONHandler(&b, &slog.HandlerOptions{Level: slog.LevelDebug})
+	hc := slog.NewTextHandler(&c, &slog.HandlerOptions{Level: slog.LevelError})
 
-	m := multiHandler{ha, hb}
+	m := multiHandler{ha, hb, hc}
+	// Any-enabled semantics: one child allows Debug even though the others don't.
+	if !m.Enabled(context.Background(), slog.LevelDebug) {
+		t.Fatal("enabled for debug expected: one child handler allows debug")
+	}
 	if !m.Enabled(context.Background(), slog.LevelInfo) {
 		t.Fatal("enabled for info expected")
 	}
-	if err := m.Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelInfo, "hello", 0)); err != nil {
+	if err := m.Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelDebug, "hello", 0)); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if !strings.Contains(a.String(), "hello") || !strings.Contains(b.String(), "hello") {
-		t.Fatalf("both handlers must receive the record, got %q and %q", a.String(), b.String())
+	if strings.Contains(a.String(), "hello") {
+		t.Fatalf("info-level handler must not receive a debug record, got %q", a.String())
+	}
+	if !strings.Contains(b.String(), "hello") {
+		t.Fatalf("debug-level handler must receive the debug record, got %q", b.String())
+	}
+	if strings.Contains(c.String(), "hello") {
+		t.Fatalf("error-level handler must not receive a debug record, got %q", c.String())
 	}
 	withAttrs := m.WithAttrs([]slog.Attr{slog.String("k", "v")})
 	if withAttrs == nil {

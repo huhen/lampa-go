@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
@@ -30,6 +31,15 @@ import (
 
 const scopeName = "lampa-go"
 
+const (
+	// setupShutdownBudget bounds cleanup of already-created providers when
+	// Setup fails partway through.
+	setupShutdownBudget = 3 * time.Second
+	// providerShutdownBudget bounds each provider shutdown when the caller
+	// did not pass a context with a deadline.
+	providerShutdownBudget = 5 * time.Second
+)
+
 // Core holds the runtime observability primitives.
 type Core struct {
 	Logger *slog.Logger
@@ -40,10 +50,19 @@ type Core struct {
 }
 
 // Shutdown flushes and stops all providers (reverse registration order).
+// If ctx carries no deadline, each provider gets its own shutdown budget so a
+// hanging exporter cannot starve the remaining ones.
 func (c *Core) Shutdown(ctx context.Context) error {
+	_, hasDeadline := ctx.Deadline()
 	var errs []error
 	for i := len(c.shutdown) - 1; i >= 0; i-- {
-		if err := c.shutdown[i](ctx); err != nil {
+		runCtx := ctx
+		if !hasDeadline {
+			var cancel context.CancelFunc
+			runCtx, cancel = context.WithTimeout(context.Background(), providerShutdownBudget)
+			defer cancel()
+		}
+		if err := c.shutdown[i](runCtx); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -65,10 +84,17 @@ func Setup(ctx context.Context, otelCfg config.OTel, logCfg config.Log) (*Core, 
 	}
 
 	if otelCfg.Endpoint == "" {
-		return nil, fmt.Errorf("otel.endpoint is required when otel.enable is true")
+		return nil, errors.New("otel.endpoint is required when otel.enable is true")
 	}
 
-	res := newResource(otelCfg.ServiceName)
+	res, err := newResource(otelCfg.ServiceName)
+	if err != nil {
+		return nil, fmt.Errorf("create otel resource: %w", err)
+	}
+
+	// Create all exporters and providers first; only once every one of them
+	// succeeded, wire up shutdowns, expose fields and install globals. On any
+	// failure the providers created so far are shut down before returning.
 
 	traceExp, err := otlptracegrpc.New(ctx,
 		append([]otlptracegrpc.Option{otlptracegrpc.WithEndpoint(otelCfg.Endpoint)},
@@ -80,46 +106,67 @@ func Setup(ctx context.Context, otelCfg config.OTel, logCfg config.Log) (*Core, 
 		sdktrace.WithBatcher(traceExp),
 		sdktrace.WithResource(res),
 	)
-	core.shutdown = append(core.shutdown, tp.Shutdown)
-	core.Tracer = tp.Tracer(scopeName)
-	otel.SetTracerProvider(tp)
 
 	metricExp, err := otlpmetricgrpc.New(ctx,
 		append([]otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(otelCfg.Endpoint)},
 			withInsecureMetric(otelCfg)...)...)
 	if err != nil {
-		return nil, fmt.Errorf("create metric exporter: %w", err)
+		return nil, setupFailed(fmt.Errorf("create metric exporter: %w", err), tp.Shutdown)
 	}
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)),
 		sdkmetric.WithResource(res),
 	)
-	core.shutdown = append(core.shutdown, mp.Shutdown)
-	core.Meter = mp.Meter(scopeName)
-	otel.SetMeterProvider(mp)
 
 	logExp, err := otlploggrpc.New(ctx,
 		append([]otlploggrpc.Option{otlploggrpc.WithEndpoint(otelCfg.Endpoint)},
 			withInsecureLog(otelCfg)...)...)
 	if err != nil {
-		return nil, fmt.Errorf("create log exporter: %w", err)
+		return nil, setupFailed(fmt.Errorf("create log exporter: %w", err), mp.Shutdown, tp.Shutdown)
 	}
 	lp := sdklog.NewLoggerProvider(
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExp)),
 		sdklog.WithResource(res),
 	)
-	core.shutdown = append(core.shutdown, lp.Shutdown)
+
+	core.shutdown = []func(context.Context) error{tp.Shutdown, mp.Shutdown, lp.Shutdown}
+	core.Tracer = tp.Tracer(scopeName)
+	core.Meter = mp.Meter(scopeName)
 	core.Logger = slog.New(multiHandler{
 		stdout,
 		otelslog.NewHandler(scopeName, otelslog.WithLoggerProvider(lp)),
 	})
+
+	otel.SetTracerProvider(tp)
+	otel.SetMeterProvider(mp)
+	// Surface internal exporter errors in our own log stream.
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		core.Logger.Error("otel", "error", err)
+	}))
 	slog.SetDefault(core.Logger)
 
 	return core, nil
 }
 
-func newResource(serviceName string) *resource.Resource {
-	return resource.NewWithAttributes("", attribute.String("service.name", serviceName))
+// setupFailed shuts down the providers created so far with a short budget and
+// joins their errors with the cause of the failure.
+func setupFailed(cause error, shutdowns ...func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), setupShutdownBudget)
+	defer cancel()
+	errs := []error{cause}
+	for _, fn := range shutdowns {
+		if err := fn(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func newResource(serviceName string) (*resource.Resource, error) {
+	return resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes("", attribute.String("service.name", serviceName)),
+	)
 }
 
 func withInsecureTrace(cfg config.OTel) []otlptracegrpc.Option {
