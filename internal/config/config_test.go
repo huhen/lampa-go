@@ -21,6 +21,11 @@ func TestDefaultsAreValid(t *testing.T) {
 	if cfg.DB.Driver != DriverSQLite {
 		t.Errorf("driver = %q, want %q", cfg.DB.Driver, DriverSQLite)
 	}
+	// The default host:port endpoint must satisfy the otel validation rules.
+	cfg.OTel.Enable = true
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("defaults with otel enabled must be valid: %v", err)
+	}
 }
 
 func TestLoadOverridesAndDurationParsing(t *testing.T) {
@@ -122,6 +127,10 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		func(c *Config) { c.Cub.Timeout = Duration(0) },
 		func(c *Config) { c.DB.MaxOpenConns = -5 },
 		func(c *Config) { c.Log.Format = "csv" },
+		func(c *Config) { c.Log.Level = "loud" },
+		func(c *Config) { c.OTel.Enable = true; c.OTel.Endpoint = "" },
+		func(c *Config) { c.OTel.Enable = true; c.OTel.ServiceName = "" },
+		func(c *Config) { c.OTel.Enable = true; c.OTel.Endpoint = "http://localhost:4317" },
 	}
 	for i, breakFn := range cases {
 		cfg := Defaults()

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -170,6 +172,21 @@ func (c *Config) Validate() error {
 	case "text", "json":
 	default:
 		return fmt.Errorf("log.format must be \"text\" or \"json\"")
+	}
+	var lvl slog.Level
+	if err := lvl.UnmarshalText([]byte(c.Log.Level)); err != nil {
+		return fmt.Errorf("invalid log.level %q: %w", c.Log.Level, err)
+	}
+	if c.OTel.Enable {
+		if c.OTel.Endpoint == "" {
+			return errors.New("otel.endpoint is required when otel.enable is true")
+		}
+		if c.OTel.ServiceName == "" {
+			return errors.New("otel.service_name is required when otel.enable is true")
+		}
+		if strings.Contains(c.OTel.Endpoint, "://") {
+			return fmt.Errorf("otel.endpoint must be host:port for OTLP gRPC, got %q", c.OTel.Endpoint)
+		}
 	}
 	return nil
 }
