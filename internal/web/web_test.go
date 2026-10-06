@@ -41,9 +41,11 @@ func TestHandler(t *testing.T) {
 	}{
 		{"root serves index", "/", http.StatusOK, "<html>lampa-index</html>", "no-cache"},
 		{"index.html no-cache", "/index.html", http.StatusOK, "<html>lampa-index</html>", "no-cache"},
+		{"index rewrite keeps query", "/index.html?v=1", http.StatusOK, "<html>lampa-index</html>", "no-cache"},
 		{"assembly no-cache", "/assembly.json", http.StatusOK, "{}", "no-cache"},
 		{"app.js long cache", "/app.min.js", http.StatusOK, "// app", "public, max-age=86400"},
 		{"nested file", "/css/app.css", http.StatusOK, "body{}", "public, max-age=86400"},
+		{"dir not listed", "/css/", http.StatusNotFound, "", ""},
 		{"unknown is 404", "/missing.js", http.StatusNotFound, "", ""},
 	}
 	for _, tc := range cases {
