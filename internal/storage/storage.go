@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql
 	"github.com/pressly/goose/v3"
@@ -32,24 +33,42 @@ func Open(cfg config.DB) (*sql.DB, error) {
 }
 
 func openSQLite(cfg config.DB) (*sql.DB, error) {
-	if dir := filepath.Dir(cfg.DSN); dir != "" && dir != "." {
+	if dir := sqliteDir(cfg.DSN); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("create db directory: %w", err)
 		}
 	}
-	db, err := sql.Open("sqlite", cfg.DSN)
+	// Pragmas are passed as DSN params so the driver applies them on EVERY new
+	// pooled connection: PRAGMA foreign_keys is connection-scoped and
+	// database/sql may silently replace a connection after a driver error.
+	sep := "?"
+	if strings.Contains(cfg.DSN, "?") {
+		sep = "&"
+	}
+	dsrc := cfg.DSN + sep + "_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsrc)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	// SQLite has a single writer: one connection avoids SQLITE_BUSY.
 	db.SetMaxOpenConns(1)
-	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA foreign_keys=ON"} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("exec %s: %w", pragma, err)
-		}
+	// Eager connectivity/path validation; the DSN params above carry the real,
+	// per-connection pragma configuration.
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("exec pragma journal_mode: %w", err)
 	}
 	return db, nil
+}
+
+// sqliteDir derives the on-disk directory of a sqlite DSN, ignoring a query
+// part and an optional "file:" prefix so both "file:/data/app.db?x=1" and
+// "/data/app.db" yield "/data".
+func sqliteDir(dsn string) string {
+	if base, _, found := strings.Cut(dsn, "?"); found {
+		dsn = base
+	}
+	return filepath.Dir(strings.TrimPrefix(dsn, "file:"))
 }
 
 func openPostgres(cfg config.DB) (*sql.DB, error) {
@@ -57,16 +76,12 @@ func openPostgres(cfg config.DB) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	// database/sql is the connection pool; apply the configured limits.
-	if cfg.MaxOpenConns > 0 {
-		db.SetMaxOpenConns(cfg.MaxOpenConns)
-	}
-	if cfg.MaxIdleConns > 0 {
-		db.SetMaxIdleConns(cfg.MaxIdleConns)
-	}
-	if lt := cfg.ConnMaxLifetime.Std(); lt > 0 {
-		db.SetConnMaxLifetime(lt)
-	}
+	// database/sql is the connection pool; apply the configured limits as-is.
+	// Zero semantics: 0 = unlimited open conns, 0 = keep no idle conns and
+	// 0 lifetime = connections are reused forever.
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetConnMaxLifetime(cfg.ConnMaxLifetime.Std())
 	return db, nil
 }
 
@@ -74,12 +89,12 @@ func openPostgres(cfg config.DB) (*sql.DB, error) {
 // goose's global state (SetBaseFS/SetDialect) is acceptable here because the
 // app opens the database once at startup.
 func Migrate(ctx context.Context, db *sql.DB, driver string) error {
-	dialect := map[string]string{
+	dialect, ok := map[string]string{
 		config.DriverSQLite:   "sqlite3",
 		config.DriverPostgres: "postgres",
 	}[driver]
-	if dialect == "" {
-		dialect = "sqlite3"
+	if !ok {
+		return fmt.Errorf("unknown db driver %q", driver)
 	}
 	goose.SetBaseFS(migrationsFS)
 	if err := goose.SetDialect(dialect); err != nil {
