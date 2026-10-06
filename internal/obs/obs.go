@@ -139,9 +139,11 @@ func Setup(ctx context.Context, otelCfg config.OTel, logCfg config.Log) (*Core, 
 
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
-	// Surface internal exporter errors in our own log stream.
+	// Surface internal exporter errors on stdout only: routing them through
+	// core.Logger would feed SDK errors back into the export pipeline.
+	otelLogger := slog.New(stdout)
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		core.Logger.Error("otel", "error", err)
+		otelLogger.Error("otel", "error", err)
 	}))
 	slog.SetDefault(core.Logger)
 

@@ -69,6 +69,19 @@ func TestMultiHandlerFanOut(t *testing.T) {
 	if strings.Contains(c.String(), "hello") {
 		t.Fatalf("error-level handler must not receive a debug record, got %q", c.String())
 	}
+	// An Info record must reach every handler whose level allows it.
+	if err := m.Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelInfo, "hello-info", 0)); err != nil {
+		t.Fatalf("Handle (info): %v", err)
+	}
+	if !strings.Contains(a.String(), "hello-info") {
+		t.Fatalf("info-level handler must receive the info record, got %q", a.String())
+	}
+	if !strings.Contains(b.String(), "hello-info") {
+		t.Fatalf("debug-level handler must receive the info record, got %q", b.String())
+	}
+	if strings.Contains(c.String(), "hello-info") {
+		t.Fatalf("error-level handler must not receive the info record, got %q", c.String())
+	}
 	withAttrs := m.WithAttrs([]slog.Attr{slog.String("k", "v")})
 	if withAttrs == nil {
 		t.Fatal("WithAttrs must return a handler")
