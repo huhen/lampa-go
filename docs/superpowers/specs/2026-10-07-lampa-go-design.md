@@ -89,7 +89,7 @@ RequestID → OTel trace context → slog-логирование (с `trace_id`)
 | `/cub/api/metric/*` | заглушка | `{"secuses":true}` |
 | `/cub/api/ad/*` | заглушка | пустая реклама: `{"secuses":true,"ad":[],...}` |
 | `/cub/geo` | заглушка | страна клиента: из `{cub.geo_header}` (проставляет reverse-proxy), при отсутствии — `{cub.geo_default}` |
-| `/cub/tmdb./...`, `/cub/geo./...` | прокси | маркер поддомена в первом сегменте → `tmdb.<upstream-host>/...` (приём CubProxy `GetDomain`; работает на одном домене, без wildcard DNS) |
+| `/cub/tmdb/...`, `/cub/geo/...` | прокси | маркер поддомена в первом сегменте → `tmdb.<upstream-host>/...` (приём CubProxy `GetDomain`; работает на одном домене, без wildcard DNS) |
 | `/cub/{остальное}` | прокси | path-preserving → `{cub.upstream}/{suffix}` |
 | `/api/*` | резерв | под собственный серверный API (в v1 не занят) |
 | `/*` | web | статика фронта из `{server.static_dir}` |
@@ -106,7 +106,7 @@ RequestID → OTel trace context → slog-логирование (с `trace_id`)
 - таймаут `{cub.timeout}` через `context`; стриминг тела без буферизации (`FlushInterval = -1`);
 - без ретраев, circuit breaker и кеша — YAGNI для каркаса.
 
-Поддоменные маркеры: первый сегмент пути из множества `{tmdb., geo., ws., imagetmdb., cdn., ad.}` → поддомен приписывается к хосту upstream (`/cub/tmdb./3/x` → `https://tmdb.cub.best/3/x`). Множество — конфиг `{cub.subdomain_markers}`.
+Поддоменные маркеры: первый сегмент пути из множества `{tmdb, geo, ws, imagetmdb, cdn, ad}` → поддомен приписывается к хосту upstream (`/cub/tmdb/3/x` → `https://tmdb.cub.best/3/x`). Множество — конфиг `{cub.subdomain_markers}`.
 
 ### 5.4 Статика (`internal/web`)
 
@@ -152,7 +152,7 @@ cub:
   timeout: 15s
   geo_header: X-Geo-Country
   geo_default: US
-  subdomain_markers: ["tmdb.", "geo.", "ws.", "imagetmdb.", "cdn.", "ad."]
+  subdomain_markers: ["tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"]
 db:
   driver: sqlite                    # sqlite | postgres
   dsn: ./data/lampa-go.db
