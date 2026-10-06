@@ -82,6 +82,16 @@ func TestLoadInvalidDuration(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  listen: \":9000\"\n  unknown_key: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for unknown key")
+	}
+}
+
 func TestValidateRejectsBadValues(t *testing.T) {
 	cases := []func(*Config){
 		func(c *Config) { c.Server.Listen = "" },
@@ -89,6 +99,8 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		func(c *Config) { c.DB.Driver = "mysql" },
 		func(c *Config) { c.DB.DSN = "" },
 		func(c *Config) { c.Cub.Upstream = "" },
+		func(c *Config) { c.Cub.Timeout = Duration(0) },
+		func(c *Config) { c.DB.MaxOpenConns = -5 },
 		func(c *Config) { c.Log.Format = "csv" },
 	}
 	for i, breakFn := range cases {

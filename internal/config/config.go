@@ -2,6 +2,8 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -20,6 +22,9 @@ type Duration time.Duration
 
 // Std returns the underlying time.Duration.
 func (d Duration) Std() time.Duration { return time.Duration(d) }
+
+// String implements fmt.Stringer.
+func (d Duration) String() string { return time.Duration(d).String() }
 
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
@@ -114,7 +119,10 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("read config: %w", err)
 		}
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
+		// Strict decoding: typos like "staticdir" must fail, not be ignored.
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(&cfg); err != nil {
 			return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 		}
 	}
@@ -127,10 +135,10 @@ func Load(path string) (Config, error) {
 // Validate checks the configuration for obvious errors.
 func (c *Config) Validate() error {
 	if c.Server.Listen == "" {
-		return fmt.Errorf("server.listen is required")
+		return errors.New("server.listen is required")
 	}
 	if c.Server.StaticDir == "" {
-		return fmt.Errorf("server.static_dir is required")
+		return errors.New("server.static_dir is required")
 	}
 	switch c.DB.Driver {
 	case DriverSQLite, DriverPostgres:
@@ -138,10 +146,23 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("db.driver must be %q or %q", DriverSQLite, DriverPostgres)
 	}
 	if c.DB.DSN == "" {
-		return fmt.Errorf("db.dsn is required")
+		return errors.New("db.dsn is required")
 	}
 	if c.Cub.Upstream == "" {
-		return fmt.Errorf("cub.upstream is required")
+		return errors.New("cub.upstream is required")
+	}
+	// In net/http a non-positive timeout means "no timeout".
+	if c.Cub.Timeout.Std() <= 0 {
+		return errors.New("cub.timeout must be positive")
+	}
+	if c.DB.MaxOpenConns < 0 {
+		return errors.New("db.max_open_conns must not be negative")
+	}
+	if c.DB.MaxIdleConns < 0 {
+		return errors.New("db.max_idle_conns must not be negative")
+	}
+	if c.DB.ConnMaxLifetime.Std() < 0 {
+		return errors.New("db.conn_max_lifetime must not be negative")
 	}
 	switch c.Log.Format {
 	case "text", "json":
