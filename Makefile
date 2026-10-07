@@ -1,7 +1,13 @@
 GO ?= go
 BINARY := bin/lampa-go
 
-.PHONY: all build run test vet fmt smoke clean
+# Deploy directory for the frontend pipeline; exported so that
+# scripts/update-frontend.sh (which reads FE_DEPLOY_DIR from the environment)
+# and make agree on one name.
+export FE_DEPLOY_DIR ?= deploy/web
+
+.PHONY: all build run test vet fmt smoke clean \
+	fe-diff fe-update fe-build fe-deploy fe-new-patch
 
 all: build
 
@@ -25,3 +31,19 @@ smoke: build
 
 clean:
 	rm -rf bin
+
+fe-diff:
+	./scripts/update-frontend.sh diff
+
+fe-update:
+	./scripts/update-frontend.sh update
+
+fe-build:
+	./scripts/update-frontend.sh build
+
+fe-deploy:
+	./scripts/update-frontend.sh deploy
+
+fe-new-patch:
+	@test -n "$(NAME)" || { echo "usage: make fe-new-patch NAME=010-short-name"; exit 1; }
+	./scripts/update-frontend.sh new-patch $(NAME)

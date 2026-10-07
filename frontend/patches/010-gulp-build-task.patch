@@ -1,0 +1,29 @@
+diff --git a/gulpfile.js b/gulpfile.js
+index 41ca49b4..17c5cc0c 100644
+--- a/gulpfile.js
++++ b/gulpfile.js
+@@ -421,3 +421,24 @@ exports.default = parallel(watch, browser_sync);
+ exports.debug = series(enable_debug_mode, this.default)
+ exports.doc = series(sync_doc, buildDoc)
+ exports.write_manifest = series(write_manifest)
++
++// lampa-go: non-interactive build entry.
++// The stock flow produces dest/app.js only from the default watch task,
++// which never exits, and merge() calls done() before the rollup stream has
++// flushed, so poll for the bundle file instead of chaining synchronously.
++function lampa_go_build(done) {
++    merge(function() {})
++    let started = Date.now()
++    let poll = setInterval(function() {
++        if (fs.existsSync(dstFolder + 'app.js')) {
++            clearInterval(poll)
++            // let the write settle before the next task reads the file
++            setTimeout(done, 1000)
++        } else if (Date.now() - started > 180000) {
++            clearInterval(poll)
++            done(new Error('lampa_go_build: dest/app.js was not produced in time'))
++        }
++    }, 250)
++}
++
++exports.build = lampa_go_build
