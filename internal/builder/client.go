@@ -100,7 +100,7 @@ func NewClient(rawURL, apiKey string) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) newRequest(ctx context.Context, hc *http.Client, method, path string, body io.Reader) (*http.Request, error) {
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	u := c.base.JoinPath(path)
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
@@ -110,18 +110,32 @@ func (c *Client) newRequest(ctx context.Context, hc *http.Client, method, path s
 	return req, nil
 }
 
-// statusError converts a non-2xx response into a sentinel or a descriptive error.
+// withDetail attaches the builder's message to a sentinel error, returning
+// the bare sentinel when the builder sent no body.
+func withDetail(sentinel error, detail string) error {
+	if detail == "" {
+		return sentinel
+	}
+	return fmt.Errorf("%w: %s", sentinel, detail)
+}
+
+// statusError converts a non-2xx response into a sentinel (kept enriched with
+// the builder's reason) or a descriptive error.
 func statusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	detail := string(bytes.TrimSpace(body))
 	switch resp.StatusCode {
 	case http.StatusConflict:
-		return ErrBusy
+		return withDetail(ErrBusy, detail)
 	case http.StatusTooManyRequests:
-		return ErrQueueFull
+		return withDetail(ErrQueueFull, detail)
 	case http.StatusServiceUnavailable:
-		return ErrNoVersion
+		return withDetail(ErrNoVersion, detail)
 	}
-	return fmt.Errorf("builder returned %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+	if detail == "" {
+		return fmt.Errorf("builder returned %d", resp.StatusCode)
+	}
+	return fmt.Errorf("builder returned %d: %s", resp.StatusCode, detail)
 }
 
 func decodeJSON(resp *http.Response, v any) error {
@@ -133,7 +147,7 @@ func decodeJSON(resp *http.Response, v any) error {
 
 // Status returns the builder status snapshot.
 func (c *Client) Status(ctx context.Context) (Status, error) {
-	req, err := c.newRequest(ctx, c.hcAPI, http.MethodGet, "/api/v1/status", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/status", nil)
 	if err != nil {
 		return Status{}, err
 	}
@@ -159,7 +173,7 @@ func (c *Client) StartBuild(ctx context.Context, domain string) (BuildRef, error
 	if err != nil {
 		return BuildRef{}, err
 	}
-	req, err := c.newRequest(ctx, c.hcAPI, http.MethodPost, "/api/v1/builds", bytes.NewReader(body))
+	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/builds", bytes.NewReader(body))
 	if err != nil {
 		return BuildRef{}, err
 	}
@@ -184,7 +198,7 @@ func (c *Client) StartBuild(ctx context.Context, domain string) (BuildRef, error
 
 // Build returns the status of a single build.
 func (c *Client) Build(ctx context.Context, id string) (Build, error) {
-	req, err := c.newRequest(ctx, c.hcAPI, http.MethodGet, "/api/v1/builds/"+url.PathEscape(id), nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/builds/"+url.PathEscape(id), nil)
 	if err != nil {
 		return Build{}, err
 	}
@@ -206,7 +220,7 @@ func (c *Client) Build(ctx context.Context, id string) (Build, error) {
 // DownloadArchive streams the build archive into dest (tmp file + rename).
 // Caller bounds the transfer via ctx.
 func (c *Client) DownloadArchive(ctx context.Context, id, dest string) error {
-	req, err := c.newRequest(ctx, c.hcStream, http.MethodGet, "/api/v1/builds/"+url.PathEscape(id)+"/archive", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/builds/"+url.PathEscape(id)+"/archive", nil)
 	if err != nil {
 		return err
 	}

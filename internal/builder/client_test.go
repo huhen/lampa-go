@@ -6,6 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +104,47 @@ func TestClientBuild(t *testing.T) {
 	}
 }
 
+func TestClientDownloadArchive(t *testing.T) {
+	c := newFakeBuilder(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/builds/b-1/archive" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Write([]byte("archive-bytes"))
+	}))
+	dest := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := c.DownloadArchive(context.Background(), "b-1", dest); err != nil {
+		t.Fatalf("DownloadArchive: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read dest: %v", err)
+	}
+	if string(got) != "archive-bytes" {
+		t.Errorf("content = %q, want archive-bytes", got)
+	}
+}
+
+func TestClientDownloadArchiveCleanup(t *testing.T) {
+	c := newFakeBuilder(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ab"))
+		panic(http.ErrAbortHandler) // drop the connection mid-body
+	}))
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "bundle.tar.gz")
+	if err := c.DownloadArchive(context.Background(), "b-1", dest); err == nil {
+		t.Fatal("expected error for aborted body")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".archive-") {
+			t.Errorf("leftover temp archive: %s", e.Name())
+		}
+	}
+}
+
 func TestClientErrorMapping(t *testing.T) {
 	cases := []struct {
 		code int
@@ -113,11 +157,14 @@ func TestClientErrorMapping(t *testing.T) {
 	for _, tc := range cases {
 		c := newFakeBuilder(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(tc.code)
-			w.Write([]byte(`{"error": "..."}`))
+			w.Write([]byte(`{"error": "fake reason"}`))
 		}))
 		_, err := c.StartBuild(context.Background(), "d")
 		if !errors.Is(err, tc.want) {
 			t.Errorf("code %d: err = %v, want %v", tc.code, err, tc.want)
+		}
+		if !strings.Contains(err.Error(), "fake reason") {
+			t.Errorf("code %d: error lost builder detail: %v", tc.code, err)
 		}
 	}
 }
