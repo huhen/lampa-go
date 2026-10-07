@@ -1,0 +1,82 @@
+# Обновление фронтенда
+
+Как устроен пайплайн обновления веб-интерфейса Lampa: upstream-код собирается из pristine-клона, поверх применяются наши патч-файлы и overlay, результат деплоится в `server.static_dir`.
+
+## Как это работает
+
+Ключевые сущности:
+
+- `frontend/sources/` — **pristine-клон** upstream (`https://github.com/yumata/lampa-source.git`, ветка `main`). В git не входит (gitignored); скрипт клонирует его сам при первом запуске.
+- `frontend/ORIGIN_COMMIT` — коммит upstream, который был применён последним апдейтом. По нему считается diff и решается, есть ли что обновлять.
+- `frontend/patches/NNN-*.patch` — наши патч-файлы, применяются **по порядку имён** через `git apply`.
+- `frontend/overlay/` — файлы, которые **копируются поверх** sources при каждой сборке (без патчинга): сейчас это `public/plugins/modification.js` → `plugins/modification.js` в сборке.
+- `frontend/package-lock.json` — **наш pinned lockfile**. Upstream не имеет lockfile (файл в их `.gitignore`), поэтому пайплайн держит свой, чтобы установки были воспроизводимыми (`npm ci`).
+- `deploy/web` (переопределяется `FE_DEPLOY_DIR`) — каталог деплоя, он же `server.static_dir`.
+
+Шаги `make fe-update` (как в `scripts/update-frontend.sh`, команда `update`):
+
+1. **fetch** — клонировать `sources`, если клона ещё нет; `git fetch origin main`.
+2. **Сводка diff** — `diff --stat` и `--name-status` от `ORIGIN_COMMIT` до `FETCH_HEAD`.
+3. **Предупреждение о конфликтах** — пересечение файлов, трогаемых нашими патчами (из `+++ b/<path>` строк патчей), с файлами, изменёнными upstream. Предупреждение печатается и в `fe-diff`, и в `fe-update`.
+4. **Reset до нового upstream-коммита** — `checkout -f FETCH_HEAD` + `clean -fd`. `clean` удаляет untracked-файлы, включая скопированный ранее overlay (build скопирует его заново на шаге 7), но сохраняет игнорируемые пути (`node_modules/`).
+5. **Чистая сборка** — `rm -rf build dest` (gulp-newer инкрементален по mtime, файлы, удалённые upstream, остались бы в старом `build/`; апдейты редки, поэтому пересобираем с нуля; `node_modules` сохраняется).
+6. **Apply patches** — каждый `patches/NNN-*.patch` по порядку; перед применением `git apply --check`, при отказе — ошибка патча выводится и скрипт падает (см. [Разрешение конфликтов](#разрешение-конфликтов)).
+7. **Overlay** — `cp -a overlay/. sources/`.
+8. **Deps-check** — свой pinned `frontend/package-lock.json` копируется в sources; свежесть установки проверяется по штампу `node_modules/.fe-lock-stamp` (md5 от `package.json` + lockfile). Если штамп не совпал (в том числе когда upstream поменял зависимости) — переустановка `npm ci`; при рассинхроне lockfile с новым `package.json` — re-resolve с бэкапом в `package-lock.json.bak` и предупреждением «commit it».
+9. **Сборка** — `npx gulp lampa_go_build` + `npx gulp pack_github`. Таск `lampa_go_build` приходит из нашего патча `010-gulp-build-task.patch`: у upstream нет неинтерактивного таска, который собирает `dest/app.js` (дефолтный watch-таск собирает его, но не завершается), а `pack_github` без него не работает.
+10. **Атомарный deploy** — сборка (`sources/build/github/lampa`) копируется в `<deploy>.tmp`, затем подмена rename'ами: текущий каталог → `<deploy>.old`, `tmp` → `deploy`, после чего `old` удаляется. Окна с недописанным каталогом нет.
+11. **ORIGIN_COMMIT** — в файл пишется новый upstream-коммит; печатается сводка; если lockfile был пере-разрешён — предупреждение «commit it».
+
+## Команды
+
+| Команда | Что делает |
+|---|---|
+| `make fe-diff` | только сводка upstream-изменений с последнего апдейта + предупреждение о конфликтах патчей; ничего не собирает |
+| `make fe-update` | полный цикл: fetch → сводка → патчи → overlay → deps → build → deploy → `ORIGIN_COMMIT` |
+| `make fe-build` | собрать текущий `sources` + **свежий overlay** (удобно после правки overlay-файлов) |
+| `make fe-deploy` | выложить последнюю сборку в каталог деплоя |
+| `make fe-new-patch NAME=NNN-slug` | сохранить правки рабочего дерева `sources` как `patches/NNN-slug.patch` |
+
+Переменные окружения: `FORCE=1` — выполнить полный цикл `fe-update`, даже если upstream-коммит не изменился (пересобрать); `FE_DEPLOY_DIR` — каталог деплоя (по умолчанию `deploy/web`; Makefile экспортирует то же значение).
+
+### fe-new-patch
+
+`make fe-new-patch NAME=020-short-name`:
+
+- имя обязано матчиться regex `^[0-9]{3}-[A-Za-z0-9._-]+$`;
+- новые (untracked) файлы **учитываются** — перед diff файлы помечаются intent-to-add (`git add -N -A`);
+- из diff **исключаются**: `index/github/assembly.json` (сборочный шум), файлы, уже покрытые существующими патчами (после апдейта они лежат в дереве применёнными), и overlay-файлы (они и так копируются при каждом обновлении);
+- если новых изменений сверх этих исключений нет — скрипт падает с «no new changes»;
+- **дерево остаётся dirty**: скрипт сознательно не откатывает захваченные правки (в одном файле могут смешаться ханки применённого патча и новые — хирургический откат ненадёжен). Это безопасно: следующий `fe-update` делает `checkout -f` и заодно **доказывает**, что новый патч применяется на свежем дереве;
+- **патч создан → закоммить его** (`frontend/patches/` версионируется).
+
+## Создание нового патча
+
+Пошаговый сценарий:
+
+```bash
+make fe-update                          # свежий, чистый sources
+# ... правки в frontend/sources/ ...
+make fe-new-patch NAME=020-short-name   # → frontend/patches/020-short-name.patch
+git add frontend/patches/020-short-name.patch
+git commit -m "fe: patch 020-short-name"
+make fe-update                          # применит патч на свежем checkout и задеплоит
+# проверить deploy/web
+```
+
+**Первый рекомендуемый патч** — `src/core/manifest.js`: прописать наш домен в `cub_mirrors` (`cub_mirrors = ['<боевой домен>']`), когда домен будет известен. До тех пор фронт считает зеркалами дефолтные `cub_mirrors`, а `modification.js` из overlay переписывает этот трафик в `/cub/` нашего домена на лету.
+
+## Разрешение конфликтов
+
+1. `fe-diff`/`fe-update` предупреждает, какие файлы из наших патчей тронуты upstream («conflicts likely»).
+2. Если `git apply --check` отказал, скрипт печатает ошибку git и падает — читаем её.
+3. Обновляем патч: правим файлы в `frontend/sources` с учётом нового апстрима (патчи уже применены до места отказа — дерево в актуальном состоянии), затем `make fe-new-patch NAME=<то же имя>` — **перезапишет** старый патч-файл новым содержимым.
+4. `make fe-update` — патч должен примениться на свежем checkout.
+
+## Платформенные сборки (будущее)
+
+webOS/Tizen-сборки: дополнительные gulp-таски, общий пул патчей `frontend/patches`, точечный патч `loader.js` под платформенные отличия. В пайплайн это ляжет как дополнительные цели `make fe-*` с тем же механизмом патчей и overlay.
+
+## Примечание про smoke и tmdb.localhost
+
+`make smoke` проверяет прокси-marker: запрос `/cub/tmdb/3/movie/1` должен уйти на `tmdb.localhost:<порт>`. Поэтому upstream в smoke-конфиге — `http://localhost:<порт>`, а не `127.0.0.1` (`tmdb.127.0.0.1` — не валидный IP-literal и не резолвится). Проверка требует resolver'а с поддержкой RFC 6761 (`.localhost` → loopback): systemd-resolved подходит. На musl (Alpine) `tmdb.localhost` может не резолвиться и проверка proxy-marker не пройдёт — это ограничение тестового окружения, а не бага сервера.
