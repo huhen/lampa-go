@@ -166,6 +166,16 @@ func TestRegister(t *testing.T) {
 			t.Fatalf("geo fallback: %d %q", rec.Code, rec.Body.String())
 		}
 	})
+
+	// modification.js turns geo.<our-domain>/ into /cub/geo/ (trailing
+	// slash); the stub must answer that too instead of letting the request
+	// fall through to the cub proxy.
+	t.Run("geo fallback trailing slash", func(t *testing.T) {
+		rec := do(t, mux, http.MethodGet, "/cub/geo/", "", "")
+		if rec.Code != http.StatusOK || rec.Body.String() != "US" {
+			t.Fatalf("geo fallback trailing slash: %d %q", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 func TestReadyzWithoutDB(t *testing.T) {

@@ -27,6 +27,11 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /cub/api/metric/{rest...}", metric)
 	mux.HandleFunc("GET /cub/api/ad/{rest...}", ads)
 	mux.HandleFunc("GET /cub/geo", geo(d.GeoHeader, d.GeoDefault))
+	// Subtree variant: the frontend overlay rewrites geo.<our-domain>/ (root
+	// path) to /cub/geo/ with a trailing slash. The subtree pattern is more
+	// specific than the /cub/{rest...} proxy, so it wins; nothing lives
+	// under /cub/geo/.
+	mux.HandleFunc("GET /cub/geo/", geo(d.GeoHeader, d.GeoDefault))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

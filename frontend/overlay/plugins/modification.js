@@ -15,6 +15,17 @@
 		);
 	}
 
+	// Exact mirrors and their subdomains (tmdb.cub.best) are all ours.
+	function mirrorHost(host) {
+		for (var i = 0; i < MIRRORS.length; i++) {
+			var m = MIRRORS[i];
+			if (host === m || host.indexOf('.' + m, host.length - m.length - 1) !== -1) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	Lampa.Listener.follow('request_before', function (e) {
 		var url = e.params.url;
 		if (typeof url !== 'string' || url.indexOf('/cub/') !== -1) return;
@@ -26,7 +37,7 @@
 		var path = match[2] || '/';
 		var query = match[3] || '';
 
-		if (!ownHost(host) && MIRRORS.indexOf(host) === -1) return;
+		if (!ownHost(host) && !mirrorHost(host)) return;
 
 		var marker = '';
 		var labels = host.split('.');
