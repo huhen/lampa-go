@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeArchive builds a tar.gz with the given files (name → content) into dest.
@@ -59,6 +60,19 @@ func readVersionFile(t *testing.T, dir, name string) string {
 		t.Fatalf("read %s: %v", filepath.Join(dir, name), err)
 	}
 	return string(b)
+}
+
+// pinMtimes sets distinct deterministic mtimes on version dirs so Prune's
+// retention order cannot tie on filesystem timestamp granularity.
+func pinMtimes(t *testing.T, versionsDir string, offsets map[string]time.Duration) {
+	t.Helper()
+	base := time.Now()
+	for name, off := range offsets {
+		when := base.Add(off)
+		if err := os.Chtimes(filepath.Join(versionsDir, name), when, when); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestExtract(t *testing.T) {
@@ -209,6 +223,15 @@ func TestSwapAndPrune(t *testing.T) {
 		t.Errorf("symlink target = %q, want versions/ccc", target)
 	}
 
+	// Pin distinct mtimes: equal timestamps could tie and flip the retention
+	// order (aaa must be the oldest for the count assertion to hold).
+	pinMtimes(t, filepath.Join(d.Root, "versions"), map[string]time.Duration{
+		"aaa": -3 * time.Hour,
+		"bbb": -2 * time.Hour,
+		"ccc": -time.Hour,
+		"ddd": 0,
+	})
+
 	// Prune keeps Keep newest + the currently served one.
 	if err := d.Prune(); err != nil {
 		t.Fatalf("Prune: %v", err)
@@ -228,6 +251,52 @@ func TestSwapAndPrune(t *testing.T) {
 				t.Errorf("%s must be pruned, versions = %v", gone, names)
 			}
 		}
+	}
+}
+
+// TestPruneProtectsServedOldest covers the served-guard branch: the currently
+// served version survives Prune even when it is the oldest one and falls
+// outside the Keep window.
+func TestPruneProtectsServedOldest(t *testing.T) {
+	d := newTestDeployer(t) // Keep = 3
+	ctx := t.TempDir()
+	for _, commit := range []string{"aaa", "bbb", "ccc", "ddd"} {
+		archive := filepath.Join(ctx, commit+".tar.gz")
+		writeArchive(t, archive, map[string]string{"index.html": commit})
+		if err := d.Extract(archive, commit); err != nil {
+			t.Fatalf("Extract %s: %v", commit, err)
+		}
+	}
+	pinMtimes(t, filepath.Join(d.Root, "versions"), map[string]time.Duration{
+		"aaa": -3 * time.Hour, // oldest: retention alone would drop it
+		"bbb": -2 * time.Hour,
+		"ccc": -time.Hour,
+		"ddd": 0,
+	})
+	if err := d.Swap("aaa"); err != nil {
+		t.Fatalf("Swap: %v", err)
+	}
+	if err := d.Prune(); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(d.Root, "versions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 4 {
+		t.Errorf("versions after prune = %d, want 4 (retention keeps 3, served aaa is protected)", len(entries))
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.Name()] = true
+	}
+	for _, want := range []string{"aaa", "bbb", "ccc", "ddd"} {
+		if !got[want] {
+			t.Errorf("served version %s missing after prune, versions = %v", want, got)
+		}
+	}
+	if got := readVersionFile(t, d.StaticDir, "index.html"); got != "aaa" {
+		t.Errorf("served = %q, want aaa", got)
 	}
 }
 
