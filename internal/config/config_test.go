@@ -124,6 +124,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		func(c *Config) { c.DB.Driver = "mysql" },
 		func(c *Config) { c.DB.DSN = "" },
 		func(c *Config) { c.Cub.Upstream = "" },
+		func(c *Config) { c.Cub.Upstream = "cub.best" },
 		func(c *Config) { c.Cub.Timeout = Duration(0) },
 		func(c *Config) { c.DB.MaxOpenConns = -5 },
 		func(c *Config) { c.Log.Format = "csv" },

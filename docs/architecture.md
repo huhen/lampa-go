@@ -70,6 +70,8 @@ requestID → observe (trace + metrics + request log) → recover → mux
 
 Ожидаемый будущий патч `src/core/manifest.js` (`cub_mirrors = ['<наш домен>']`) сделает наш домен «родным» зеркалом: тогда URL будет строиться сразу на наш домен без runtime-переписывания. Патч **пока не создан** — боевой домен не выбран; как его создать, описано в [frontend-update.md](frontend-update.md).
 
+> **Синхронизация списков.** Списки маркеров и зеркал продублированы в двух местах: `cub.subdomain_markers` в конфиге (их использует прокси) и `MARKERS`/`MIRRORS` в `frontend/overlay/public/plugins/modification.js` (их использует клиент). При смене зеркал upstream обновлять **оба** места; правка `modification.js` требует `make fe-update`, чтобы попасть в сборку.
+
 ## Хранилище
 
 `internal/storage` открывает БД и накатывает goose-миграции (embedded в бинарник, `internal/storage/migrations/*.sql`).

@@ -23,7 +23,7 @@
 6. **Overlay** — `cp -a overlay/. sources/`.
 7. **Deps-check** — свой pinned `frontend/package-lock.json` копируется в sources; свежесть установки проверяется по штампу `node_modules/.fe-lock-stamp` (md5 от `package.json` + lockfile). Если штамп не совпал (в том числе когда upstream поменял зависимости) — переустановка `npm ci`; при рассинхроне lockfile с новым `package.json` — re-resolve с бэкапом в `package-lock.json.bak` и предупреждением «commit it».
 8. **Сборка** — `npx gulp lampa_go_build` + `npx gulp pack_github`. Таск `lampa_go_build` приходит из нашего патча `010-gulp-build-task.patch`: у upstream нет неинтерактивного таска, который собирает `dest/app.js` (дефолтный watch-таск собирает его, но не завершается), а `pack_github` без него не работает.
-9. **Атомарный deploy** — сборка (`sources/build/github/lampa`) копируется в `<deploy>.tmp`, затем подмена rename'ами: текущий каталог → `<deploy>.old`, `tmp` → `deploy`, после чего `old` удаляется. Окна с недописанным каталогом нет.
+9. **Атомарный deploy** — сборка (`sources/build/github/lampa`) копируется в `<deploy>.tmp`, затем подмена rename'ами: текущий каталог → `<deploy>.old`, `tmp` → `deploy`, после чего `old` удаляется. Каталог не бывает недописанным (rename атомарен); между двумя rename существует микроскопический интервал без каталога — in-flight запрос может получить 404; при сбое второго `mv` каталог восстанавливается из `.old` вручную.
 10. **ORIGIN_COMMIT и сводка** — в `frontend/ORIGIN_COMMIT` пишется новый upstream-коммит; **затем** печатается сводка diff (`diff --stat` + `--name-status`) от старого до нового коммита; если lockfile был пере-разрешён — предупреждение «commit it».
 
 ## Команды

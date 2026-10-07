@@ -53,8 +53,14 @@ func metric(w http.ResponseWriter, _ *http.Request) {
 }
 
 // ads serves empty advertisement payloads so the client shows nothing.
+//
+// The real frontend (upstream vast_manager.js) asks /api/ad/get/<api>, not
+// only /vast; both must answer the vast-shaped payload, otherwise the client
+// logs "wrong format" and cycles mirrors. Other ad paths keep the minimal
+// {"secuses":true} answer.
 func ads(w http.ResponseWriter, r *http.Request) {
-	if r.PathValue("rest") == "vast" {
+	rest := r.PathValue("rest")
+	if rest == "vast" || strings.HasPrefix(rest, "get") {
 		now := time.Now()
 		writeJSON(w, map[string]any{
 			"secuses":       true,

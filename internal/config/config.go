@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -154,6 +155,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Cub.Upstream == "" {
 		return errors.New("cub.upstream is required")
+	}
+	// Subdomain markers are glued onto the upstream host, so a scheme-less
+	// value like "cub.best" would produce markers that never resolve.
+	u, err := url.Parse(c.Cub.Upstream)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("cub.upstream must be an http(s) URL, got %q", c.Cub.Upstream)
 	}
 	// In net/http a non-positive timeout means "no timeout".
 	if c.Cub.Timeout.Std() <= 0 {

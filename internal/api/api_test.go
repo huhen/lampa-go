@@ -143,6 +143,25 @@ func TestRegister(t *testing.T) {
 		}
 	})
 
+	// The real frontend (upstream vast_manager.js) requests /api/ad/get/<api>;
+	// it must get the vast-shaped payload, not the bare {"secuses":true}.
+	t.Run("ads get stub", func(t *testing.T) {
+		rec := do(t, mux, http.MethodGet, "/cub/api/ad/get/anykey", "", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("ads get: %d", rec.Code)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("ads get json: %v", err)
+		}
+		if got["secuses"] != true {
+			t.Errorf("secuses = %v, want true", got["secuses"])
+		}
+		if _, ok := got["ad"].([]any); !ok {
+			t.Errorf("ad = %v, want empty array", got["ad"])
+		}
+	})
+
 	t.Run("ads other stub", func(t *testing.T) {
 		rec := do(t, mux, http.MethodGet, "/cub/api/ad/stat", "", "")
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "secuses") {
