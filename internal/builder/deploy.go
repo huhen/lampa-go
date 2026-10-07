@@ -3,11 +3,13 @@ package builder
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Deployer manages the versioned frontend layout:
@@ -33,11 +35,13 @@ func NewDeployer(staticDir string, keep int) (*Deployer, error) {
 		// A real directory under the static_dir path means the old flat
 		// layout: the first Swap would fail (cannot rename a symlink over
 		// a directory) and the config must be migrated first.
-		if fi.IsDir() && fi.Mode()&os.ModeSymlink == 0 {
+		if fi.IsDir() {
 			return nil, fmt.Errorf(
 				"static_dir %q is a real directory; with builder enabled it must be the symlink path (e.g. <root>/current), see docs/deploy.md",
 				staticDir)
 		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("stat static_dir: %w", err)
 	}
 	return &Deployer{
 		StaticDir: staticDir,
@@ -60,6 +64,9 @@ func (d *Deployer) EnsureDirs() error {
 // extracted safely: no absolute paths, no "..", no symlinks. The version
 // dir appears atomically (extract into a temp dir, then rename).
 func (d *Deployer) Extract(archivePath, commit string) error {
+	if err := validVersionName(commit); err != nil {
+		return err
+	}
 	versionsDir := filepath.Join(d.Root, "versions")
 	dst := filepath.Join(versionsDir, commit)
 	tmp, err := os.MkdirTemp(versionsDir, ".tmp-"+commit+"-")
@@ -79,6 +86,16 @@ func (d *Deployer) Extract(archivePath, commit string) error {
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		return fmt.Errorf("place version dir: %w", err)
+	}
+	return nil
+}
+
+// validVersionName rejects commit values that are unsafe as a single
+// path component under versions/.
+func validVersionName(commit string) error {
+	if commit == "" || commit == "." || commit == ".." ||
+		strings.ContainsAny(commit, "/\\") {
+		return fmt.Errorf("invalid version name %q", commit)
 	}
 	return nil
 }

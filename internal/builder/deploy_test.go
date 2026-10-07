@@ -3,6 +3,9 @@ package builder
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,4 +126,87 @@ func TestExtractRejectsSymlink(t *testing.T) {
 	if err := d.Extract(archive, "ccc"); err == nil {
 		t.Fatal("expected error for symlink entry")
 	}
+}
+
+// snapshotDir captures every file under dir (slash-relative path → content)
+// so tests can assert the tree is unchanged.
+func snapshotDir(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if e.IsDir() {
+			out[rel+"/"] = ""
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		out[rel] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", dir, err)
+	}
+	return out
+}
+
+func TestExtractRejectsBadCommit(t *testing.T) {
+	for _, commit := range []string{"", ".", "..", "a/b", `a\b`} {
+		t.Run(fmt.Sprintf("commit=%q", commit), func(t *testing.T) {
+			d := newTestDeployer(t)
+			archive := filepath.Join(t.TempDir(), "a.tar.gz")
+			writeArchive(t, archive, map[string]string{"index.html": "<html>v1</html>"})
+			if err := d.Extract(archive, "aaa"); err != nil {
+				t.Fatalf("seed Extract(aaa): %v", err)
+			}
+			versionsDir := filepath.Join(d.Root, "versions")
+			before := snapshotDir(t, versionsDir)
+
+			if err := d.Extract(archive, commit); err == nil {
+				t.Fatal("expected error for invalid commit")
+			}
+			if after := snapshotDir(t, versionsDir); !maps.Equal(before, after) {
+				t.Errorf("versions dir changed: before %v, after %v", before, after)
+			}
+		})
+	}
+}
+
+func TestNewDeployerValidation(t *testing.T) {
+	t.Run("real directory under static_dir", func(t *testing.T) {
+		staticDir := filepath.Join(t.TempDir(), "static")
+		if err := os.MkdirAll(staticDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, err := NewDeployer(staticDir, 3)
+		if err == nil {
+			t.Fatal("expected error for real directory static_dir")
+		}
+		if !strings.Contains(err.Error(), "docs/deploy.md") {
+			t.Errorf("error should reference docs/deploy.md, got: %v", err)
+		}
+	})
+	t.Run("keep too small", func(t *testing.T) {
+		if _, err := NewDeployer(filepath.Join(t.TempDir(), "current"), 1); err == nil {
+			t.Fatal("expected error for keep=1")
+		}
+	})
+	t.Run("missing path is fine", func(t *testing.T) {
+		staticDir := filepath.Join(t.TempDir(), "current")
+		d, err := NewDeployer(staticDir, 3)
+		if err != nil {
+			t.Fatalf("NewDeployer: %v", err)
+		}
+		if d.Root != filepath.Dir(staticDir) {
+			t.Errorf("Root = %q, want %q", d.Root, filepath.Dir(staticDir))
+		}
+	})
 }
