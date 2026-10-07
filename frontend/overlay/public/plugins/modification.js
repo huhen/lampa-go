@@ -1,12 +1,17 @@
 // modification.js — lampa-go runtime integration.
 // Rewrites requests to the cub mirrors into our /cub/ proxy namespace.
-// Lampa loads this file automatically from the hosting server
-// (see src/core/plugins.js in lampa-source), so it needs no patching.
+// Lives in overlay public/plugins/ so the gulpfile packs it verbatim and
+// it deploys as plugins/modification.js — Lampa loads this file
+// automatically from the hosting server (see src/core/plugins.js in
+// lampa-source), so it needs no patching.
 (function () {
 	'use strict';
 
 	var MIRRORS = ['cub.best', 'cub.black', 'durex.monster', 'cubnotrip.top'];
 	var MARKERS = ['tmdb', 'geo', 'ws', 'imagetmdb', 'cdn', 'ad'];
+
+	// Old TV webviews (Orsay, early webOS) have no location.origin.
+	var origin = location.origin || (location.protocol + '//' + location.host);
 
 	function ownHost(host) {
 		return (
@@ -27,10 +32,11 @@
 	}
 
 	Lampa.Listener.follow('request_before', function (e) {
+		if (!e || !e.params) return;
 		var url = e.params.url;
 		if (typeof url !== 'string' || url.indexOf('/cub/') !== -1) return;
 
-		var match = url.match(/^https?:\/\/([^\/?#]+)([^?#]*)(\?[^#]*)?/);
+		var match = url.match(/^https?:\/\/([^\/?#]+)([^?#]*)(\?[^#]*)?/i);
 		if (!match) return;
 
 		var host = match[1].toLowerCase();
@@ -48,6 +54,6 @@
 		if (path === '/') path = '';
 
 		e.params.url =
-			location.origin + '/cub/' + marker + path.replace(/^\//, '') + query;
+			origin + '/cub/' + marker + path.replace(/^\//, '') + query;
 	});
 })();

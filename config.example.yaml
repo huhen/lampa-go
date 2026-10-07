@@ -1,6 +1,8 @@
 # lampa-go configuration example.
-# Copy to config.yaml and adjust. All keys have built-in defaults;
-# unknown keys are rejected at startup (strict parsing).
+# Copy to config.yaml and adjust. All keys except `server.base_domain`
+# have built-in defaults (base_domain is empty by default and consumed
+# only by the future frontend patch); unknown keys are rejected at
+# startup (strict parsing).
 
 server:
   listen: ":8080"            # address to listen on (behind a reverse proxy)
