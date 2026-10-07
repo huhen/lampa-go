@@ -99,14 +99,19 @@ apply_overlay() {
   cp -a "$OVERLAY_DIR/." "$SOURCES/"
 }
 
-lock_checksum() {
-  md5sum "$LOCK_FILE" | cut -d' ' -f1
+# Stamp input: upstream package.json plus our pinned lockfile, so an upstream
+# dependency change forces a reinstall instead of silently keeping the stale
+# pinned set.
+deps_checksum() {
+  [ -f "$LOCK_FILE" ] || return 1
+  cat "$SOURCES/package.json" "$LOCK_FILE" | md5sum | cut -d' ' -f1
 }
 
-# True when node_modules exists and was installed from the current lockfile.
+# True when node_modules exists and was installed from the current
+# package.json + lockfile pair.
 deps_fresh() {
   [ -f "$SOURCES/node_modules/.fe-lock-stamp" ] || return 1
-  [ "$(cat "$SOURCES/node_modules/.fe-lock-stamp")" = "$(lock_checksum)" ]
+  [ "$(cat "$SOURCES/node_modules/.fe-lock-stamp")" = "$(deps_checksum)" ]
 }
 
 # Upstream ships no package-lock.json (it is listed in their .gitignore), so we
@@ -121,8 +126,17 @@ install_deps() {
   fi
   log "installing npm dependencies (npm ci from the pinned lockfile)"
   cp "$LOCK_FILE" "$SOURCES/package-lock.json"
-  (cd "$SOURCES" && npm ci --no-audit --no-fund)
-  lock_checksum > "$SOURCES/node_modules/.fe-lock-stamp"
+  if ! (cd "$SOURCES" && npm ci --no-audit --no-fund); then
+    # 'npm ci' refuses to run when the lockfile is out of sync with
+    # package.json — that means upstream changed its dependencies, so
+    # re-resolve the pinned lockfile and retry.
+    log "lockfile out of sync with upstream package.json — re-resolving"
+    (cd "$SOURCES" && npm install --package-lock-only --no-audit --no-fund)
+    cp "$SOURCES/package-lock.json" "$LOCK_FILE"
+    log "updated $LOCK_FILE — commit it to keep installs reproducible"
+    (cd "$SOURCES" && npm ci --no-audit --no-fund)
+  fi
+  deps_checksum > "$SOURCES/node_modules/.fe-lock-stamp"
 }
 
 build_frontend() {
@@ -181,10 +195,15 @@ cmd_update() {
 
   # Reset the working tree to the new upstream commit.
   # 'clean -fd' drops our overlay files (they are re-added below) but keeps
-  # ignored paths like node_modules and build/.
+  # ignored paths like node_modules/.
   log "checking out ${new:0:12}"
   git -C "$SOURCES" checkout -q -f FETCH_HEAD
   git -C "$SOURCES" clean -qfd
+
+  # gulp-newer is mtime-incremental, so files deleted upstream would linger
+  # in a reused build/. Updates are infrequent — rebuild from scratch;
+  # node_modules is retained (standalone 'build' stays incremental).
+  rm -rf "$SOURCES/build" "$SOURCES/dest"
 
   TMP_ERR="$(mktemp)"
   trap 'rm -f "$TMP_ERR"' EXIT
