@@ -11,13 +11,23 @@ SERVER_PID=""
 UPSTREAM_PID=""
 
 cleanup() {
+  # SERVER_PID is normally handled (kill+wait) in the main flow; these lines
+  # only fire on failure paths where the server is still up.
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+  [ -n "$SERVER_PID" ] && wait "$SERVER_PID" 2>/dev/null || true
   [ -n "$UPSTREAM_PID" ] && kill "$UPSTREAM_PID" 2>/dev/null || true
+  wait "$UPSTREAM_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
 
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
+
+command -v python3 >/dev/null || fail "python3 is required for the smoke test"
+
+# Pre-flight: a stale listener on the smoke port would make every check hit
+# an old server; fail loudly instead of reporting bogus results.
+curl -fsS --max-time 1 "$BASE/healthz" >/dev/null 2>&1 && fail "port ${PORT} already in use (stale server?); set SMOKE_PORT"
 
 check() { # check <name> <expected-substr> <url>
   local name="$1" expected="$2" url="$3"
@@ -96,10 +106,23 @@ check "proxy-marker" "upstream:/3/movie/1" "$BASE/cub/tmdb/3/movie/1"
 check "static-index" "lampa-smoke" "$BASE/"
 check "geo-default" "US" "$BASE/cub/geo"
 
-HDRS="$(curl -fsS -D - -o /dev/null "$BASE/cub/api/anything")"
+HDRS="$(curl -sS -D - -o /dev/null "$BASE/cub/api/anything")"
+# No -f above: the status line must be parsed here, so assert 200 explicitly
+# (otherwise a proxy error page could pass the leak check vacuously).
+case "$HDRS" in
+  HTTP/1.1\ 200*|HTTP/1.0\ 200*) ;;
+  *) fail "proxy headers: expected 200" ;;
+esac
 case "$HDRS" in
   *Server:*fake-upstream*) fail "proxy headers: upstream Server header leaked" ;;
   *) echo "ok   proxy header filtering" ;;
 esac
+
+# Graceful shutdown: SIGTERM must stop the server cleanly and be logged.
+kill "$SERVER_PID" || fail "graceful shutdown: server not running"
+wait "$SERVER_PID" || fail "graceful shutdown: server exited non-zero"
+grep -q "shutting down" "$TMP/server.log" || fail "graceful shutdown: 'shutting down' not logged"
+echo "ok   graceful shutdown"
+SERVER_PID=""
 
 echo "SMOKE OK"

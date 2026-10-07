@@ -50,11 +50,17 @@ func run() error {
 		}
 	}()
 
+	core.Logger.Info("starting", slog.String("config", *configPath))
+
 	db, err := storage.Open(cfg.DB)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			core.Logger.Warn("database close", slog.Any("error", err))
+		}
+	}()
 
 	if err := storage.Migrate(ctx, db, cfg.DB.Driver); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
@@ -89,8 +95,14 @@ func run() error {
 	case <-ctx.Done():
 	}
 
+	// restore default signal handling: a second signal force-quits
+	stop()
+
 	core.Logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	return nil
 }
