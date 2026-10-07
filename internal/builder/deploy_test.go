@@ -180,6 +180,101 @@ func TestExtractRejectsBadCommit(t *testing.T) {
 	}
 }
 
+func TestSwapAndPrune(t *testing.T) {
+	d := newTestDeployer(t)
+	ctx := t.TempDir() // scratch for archives
+	for _, commit := range []string{"aaa", "bbb", "ccc", "ddd"} {
+		archive := filepath.Join(ctx, commit+".tar.gz")
+		writeArchive(t, archive, map[string]string{"index.html": commit})
+		if err := d.Extract(archive, commit); err != nil {
+			t.Fatalf("Extract %s: %v", commit, err)
+		}
+	}
+
+	// Swap is idempotent and works over an existing symlink or nothing.
+	for range 2 {
+		if err := d.Swap("ccc"); err != nil {
+			t.Fatalf("Swap: %v", err)
+		}
+	}
+	if got := readVersionFile(t, d.StaticDir, "index.html"); got != "ccc" {
+		t.Errorf("served = %q, want ccc", got)
+	}
+	// The symlink must be relative so the tree stays movable.
+	target, err := os.Readlink(d.StaticDir)
+	if err != nil {
+		t.Fatalf("readlink: %v", err)
+	}
+	if target != filepath.Join("versions", "ccc") {
+		t.Errorf("symlink target = %q, want versions/ccc", target)
+	}
+
+	// Prune keeps Keep newest + the currently served one.
+	if err := d.Prune(); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(d.Root, "versions"))
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	// ddd, ccc, bbb are the three newest by mtime; ccc is protected as served.
+	if len(names) != 3 {
+		t.Errorf("versions after prune = %v, want 3 entries", names)
+	}
+	for _, gone := range []string{"aaa"} {
+		for _, n := range names {
+			if n == gone {
+				t.Errorf("%s must be pruned, versions = %v", gone, names)
+			}
+		}
+	}
+}
+
+func TestSwapRejectsBadCommit(t *testing.T) {
+	d := newTestDeployer(t)
+	for _, bad := range []string{"", ".", "..", "a/b"} {
+		if err := d.Swap(bad); err == nil {
+			t.Errorf("Swap(%q) must fail", bad)
+		}
+	}
+	if _, err := os.Lstat(d.StaticDir); err == nil {
+		t.Error("Swap with a bad commit must not create the symlink")
+	}
+}
+
+func TestSwapLeavesNoTempAndPruneSweepsRoot(t *testing.T) {
+	d := newTestDeployer(t)
+	archive := filepath.Join(t.TempDir(), "a.tar.gz")
+	writeArchive(t, archive, map[string]string{"index.html": "aaa"})
+	if err := d.Extract(archive, "aaa"); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if err := d.Swap("aaa"); err != nil {
+		t.Fatalf("Swap: %v", err)
+	}
+	// No .swap- leftovers anywhere after a successful swap.
+	for _, dir := range []string{d.Root, filepath.Join(d.Root, "versions")} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".swap-") {
+				t.Errorf("%s leftover in %s", e.Name(), dir)
+			}
+		}
+	}
+	// A stale .swap- file in Root (crash leftover) is swept by Prune.
+	stale := filepath.Join(d.Root, ".swap-stale")
+	if err := os.Symlink("versions/aaa", stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Prune(); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if _, err := os.Lstat(stale); err == nil {
+		t.Error("Prune must sweep stale .swap- entries in Root")
+	}
+}
+
 func TestNewDeployerValidation(t *testing.T) {
 	t.Run("real directory under static_dir", func(t *testing.T) {
 		staticDir := filepath.Join(t.TempDir(), "static")
