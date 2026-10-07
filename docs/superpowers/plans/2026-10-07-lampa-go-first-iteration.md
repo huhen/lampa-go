@@ -2462,9 +2462,9 @@ git commit -m "feat: main binary with graceful shutdown and smoke test"
 ### Task 10: Frontend overlay and example config
 
 **Files:**
-- Create: `frontend/overlay/plugins/modification.js`, `config.example.yaml`
+- Create: `frontend/overlay/public/plugins/modification.js`, `config.example.yaml`
 
-- [ ] **Step 1: Write `frontend/overlay/plugins/modification.js`**
+- [ ] **Step 1: Write `frontend/overlay/public/plugins/modification.js`**
 
 ```js
 // modification.js — lampa-go runtime integration.
