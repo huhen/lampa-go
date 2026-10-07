@@ -89,6 +89,22 @@ func TestRegister(t *testing.T) {
 		}
 	})
 
+	t.Run("checker post body without equals", func(t *testing.T) {
+		rec := do(t, mux, http.MethodPost, "/cub/api/checker",
+			"justtoken", "application/x-www-form-urlencoded")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("checker post no equals: %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("checker post oversize body", func(t *testing.T) {
+		rec := do(t, mux, http.MethodPost, "/cub/api/checker",
+			strings.Repeat("x", (1<<20)+1), "application/x-www-form-urlencoded")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("checker post oversize: %d, want 400", rec.Code)
+		}
+	})
+
 	t.Run("blacklist is empty json array", func(t *testing.T) {
 		rec := do(t, mux, http.MethodGet, "/cub/api/plugins/blacklist", "", "")
 		if rec.Code != http.StatusOK || rec.Body.String() != "[]" {

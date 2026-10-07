@@ -2,6 +2,7 @@ package api
 
 import (
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -13,11 +14,13 @@ const maxCheckerBody = 1 << 20
 // GET returns "ok", POST echoes back the first form value.
 func checker(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Method != http.MethodPost {
 		_, _ = w.Write([]byte("ok"))
 		return
 	}
-	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mt != "application/x-www-form-urlencoded" {
 		http.Error(w, "error", http.StatusBadRequest)
 		return
 	}
@@ -73,6 +76,7 @@ func geo(header, fallback string) http.HandlerFunc {
 			country = fallback
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		_, _ = w.Write([]byte(country))
 	}
 }
