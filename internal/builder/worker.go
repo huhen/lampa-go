@@ -53,8 +53,13 @@ func NewWorker(d Deps) (*Worker, error) {
 	return &Worker{d: d}, nil
 }
 
-// Run reconciles on every tick until ctx is done.
+// Run reconciles immediately and then on every tick until ctx is done.
 func (w *Worker) Run(ctx context.Context) {
+	// Reconcile immediately: a fresh install (empty static dir) must not
+	// wait a full interval for the first deploy.
+	if err := w.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		w.d.Logger.Warn("builder reconcile", slog.Any("error", err))
+	}
 	ticker := time.NewTicker(w.d.Interval)
 	defer ticker.Stop()
 	for {
@@ -114,6 +119,12 @@ func (w *Worker) Reconcile(ctx context.Context) error {
 	}
 	if b.Status != BuildSuccess {
 		return fmt.Errorf("build %s failed: %s", b.ID, b.Error)
+	}
+	// The builder must build exactly the commit it advertised; deploying
+	// anything else would never converge (deployed ≠ available → rebuild
+	// on every tick).
+	if b.Commit != st.AvailableCommit {
+		return fmt.Errorf("builder deployed commit %q but available is %q", b.Commit, st.AvailableCommit)
 	}
 
 	if err := w.deploy(ctx, ref.BuildID, b.Commit); err != nil {

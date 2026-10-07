@@ -31,6 +31,7 @@ type fakeBuilder struct {
 	buildStatus  string // what GET /builds/{id} reports
 	buildErrCode int    // status code for POST /builds (0 = 202)
 	badBuildID   string // when set, POST /builds returns it as build_id
+	builtCommit  string // when set, GET /builds/{id} reports it as commit
 	starts       int
 	t            *testing.T
 }
@@ -55,7 +56,11 @@ func (f *fakeBuilder) handler() http.Handler {
 			w.WriteHeader(http.StatusAccepted)
 			w.Write([]byte(`{"build_id":"` + id + `","cached":false}`))
 		case r.URL.Path == "/api/v1/builds/b-1":
-			w.Write([]byte(`{"id":"b-1","commit":"` + f.available + `","status":"` + f.buildStatus + `"}`))
+			commit := f.available
+			if f.builtCommit != "" {
+				commit = f.builtCommit
+			}
+			w.Write([]byte(`{"id":"b-1","commit":"` + commit + `","status":"` + f.buildStatus + `"}`))
 		case r.URL.Path == "/api/v1/builds/b-1/archive":
 			archive := filepath.Join(f.t.TempDir(), "a.tar.gz")
 			if err := f.writeArchive(archive); err != nil {
@@ -287,16 +292,68 @@ func TestReconcileBusyRetriesNextTick(t *testing.T) {
 	}
 }
 
-func TestPruneSweepsStaleArchive(t *testing.T) {
-	d := newTestDeployer(t)
-	stale := filepath.Join(d.Root, ".archive-old.tar.gz")
-	if err := os.WriteFile(stale, []byte("junk"), 0o644); err != nil {
-		t.Fatal(err)
+// TestWorkerRunFirstReconcile covers Run's startup behavior: the first
+// reconcile happens immediately, not after a full interval (a fresh install
+// would otherwise serve nothing for up to builder.poll_interval), and Run
+// exits once the context is canceled.
+func TestWorkerRunFirstReconcile(t *testing.T) {
+	f := &fakeBuilder{available: "aaa", buildStatus: BuildSuccess, t: t}
+	w, d, meta := newTestWorker(t, f) // Interval = 1m: only the startup reconcile can deploy
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err := meta.Get(context.Background(), deployedCommitKey)
+		if err == nil && got == "aaa" {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("no startup reconcile: deployed_commit = (%q, %v)", got, err)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	if err := d.Prune(); err != nil {
-		t.Fatalf("Prune: %v", err)
+	if b, err := os.ReadFile(filepath.Join(d.StaticDir, "index.html")); err != nil || string(b) != "index for aaa" {
+		t.Errorf("served = (%q, %v), want index for aaa", b, err)
 	}
-	if _, err := os.Lstat(stale); err == nil {
-		t.Error("Prune must sweep stale .archive- files in Root")
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("Run did not return after ctx cancel")
+	}
+}
+
+// TestReconcileRejectsCommitMismatch: a builder reporting a build commit
+// other than its advertised available_commit must not be deployed — the
+// mismatch would never converge (deployed ≠ available → rebuild forever).
+func TestReconcileRejectsCommitMismatch(t *testing.T) {
+	f := &fakeBuilder{
+		available:   "aaa",
+		buildStatus: BuildSuccess,
+		builtCommit: "ccc",
+		t:           t,
+	}
+	w, d, meta := newTestWorker(t, f)
+
+	err := w.Reconcile(context.Background())
+	if err == nil {
+		t.Fatal("Reconcile must reject a build whose commit differs from available_commit")
+	}
+	if !strings.Contains(err.Error(), "but available is") {
+		t.Fatalf("error = %v, want commit mismatch detail", err)
+	}
+	if _, serr := os.Lstat(d.StaticDir); serr == nil {
+		t.Error("nothing must be deployed on commit mismatch")
+	}
+	if got, _ := meta.Get(context.Background(), deployedCommitKey); got != "" {
+		t.Errorf("deployed_commit = %q, want empty", got)
 	}
 }

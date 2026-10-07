@@ -109,6 +109,9 @@ systemctl restart lampa-go
 [lampa-web-builder](https://github.com/huhen/lampa-web-builder): воркер lampa-go сверяет
 `deployed_commit` (таблица `app_meta`) с `available_commit` билдера, при отличии заказывает
 сборку домена `server.base_domain`, скачивает tar.gz и выкладывает атомарно.
+`BUILDER_DEFAULT_DOMAIN` в `.env` билдера должен совпадать с `server.base_domain` lampa-go:
+билдер прогоняет тестовые сборки на этом домене, и расхождение означает бесполезную
+пересборку при каждом обновлении.
 
 Раскладка каталогов (`<корень>` — каталог, в котором лежит `static_dir`):
 

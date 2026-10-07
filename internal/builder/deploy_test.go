@@ -344,6 +344,23 @@ func TestSwapLeavesNoTempAndPruneSweepsRoot(t *testing.T) {
 	}
 }
 
+// TestPruneSweepsStaleArchive: the worker downloads archives into Root as
+// .archive-<buildID>.tar.gz; a crash mid-download would leave one there
+// forever, so Prune's Root sweep must cover the prefix too.
+func TestPruneSweepsStaleArchive(t *testing.T) {
+	d := newTestDeployer(t)
+	stale := filepath.Join(d.Root, ".archive-old.tar.gz")
+	if err := os.WriteFile(stale, []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Prune(); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if _, err := os.Lstat(stale); err == nil {
+		t.Error("Prune must sweep stale .archive- files in Root")
+	}
+}
+
 func TestNewDeployerValidation(t *testing.T) {
 	t.Run("real directory under static_dir", func(t *testing.T) {
 		staticDir := filepath.Join(t.TempDir(), "static")
