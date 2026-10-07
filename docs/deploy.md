@@ -102,3 +102,52 @@ systemctl restart lampa-go
 ```
 
 `systemctl restart` шлёт `SIGTERM` — срабатывает штатный graceful shutdown (см. unit выше).
+
+## Обновление фронта через билдер
+
+При `builder.enabled: true` фронтенд обновляется автоматически из
+[lampa-web-builder](https://github.com/huhen/lampa-web-builder): воркер lampa-go сверяет
+`deployed_commit` (таблица `app_meta`) с `available_commit` билдера, при отличии заказывает
+сборку домена `server.base_domain`, скачивает tar.gz и выкладывает атомарно.
+
+Раскладка каталогов (`<корень>` — каталог, в котором лежит `static_dir`):
+
+    <корень>/versions/<commit>/   распакованные сборки
+    <корень>/current              symlink → versions/<commit>; путь из server.static_dir
+
+Подмена — rename свежесозданного symlink'а поверх `current`: атомарная операция, окно 404
+отсутствует (закрывает issue #7). Хранятся последние `builder.keep_versions` версий.
+
+### compose
+
+`docker-compose.yml` в корне репозитория поднимает билдер; ключи — в `.env`
+(шаблон `.env.example`). Пока lampa-go работает бинарником на хосте, раскомментируйте
+loopback-публикацию порта и укажите `builder.url: http://127.0.0.1:8081`; после
+контейнеризации lampa-go — `builder.url: http://builder:8080` (общая сеть compose,
+порты наружу не публикуются).
+
+### Миграция с плоской раскладки
+
+Старая раскладка (файлы прямо в `static_dir`) с билдером не работает — `static_dir` должен
+указывать на symlink. Переезд:
+
+1. Остановить lampa-go.
+2. Перенести текущую статику в версионный каталог (`<commit>` — версия текущей сборки,
+   например `b4a13b6…`; если неизвестна — любой маркер, первый цикл воркера всё равно
+   задеплоит свежую версию):
+
+   ```bash
+   cd deploy/web
+   mkdir -p versions/<commit>
+   # всё верхнего уровня, кроме versions/, уезжает в версионный каталог
+   find . -mindepth 1 -maxdepth 1 ! -name versions -exec mv {} versions/<commit>/ \;
+   ln -s versions/<commit> .current-tmp && mv -T .current-tmp current
+   ```
+
+3. В конфиге: `server.static_dir: ./deploy/web/current`, секция `builder`.
+4. Запустить lampa-go. Пустой `deployed_commit` означает «обновиться до доступного»:
+   первый цикл воркера сам задеплоит актуальную версию из билдера — ручной сеанс коммита
+   в БД не нужен.
+
+Проще альтернатива, если старая статика не дорога: удалить `deploy/web` целиком, указать
+`static_dir: ./deploy/web/current` и запустить lampa-go — воркер развернёт фронт с нуля.
