@@ -1,0 +1,32 @@
+# lampa-go configuration example.
+# Copy to config.yaml and adjust. All keys have built-in defaults;
+# unknown keys are rejected at startup (strict parsing).
+
+server:
+  listen: ":8080"            # address to listen on (behind a reverse proxy)
+  static_dir: ./deploy/web   # directory with the built Lampa frontend
+  base_domain: lampa.example.com  # our public domain (used by frontend patches)
+
+cub:
+  upstream: https://cub.best # upstream the /cub/* requests are forwarded to
+  timeout: 15s               # caps the whole exchange incl. the response body
+  geo_header: X-Geo-Country  # client country header set by the reverse proxy
+  geo_default: US            # fallback when the header is missing
+  subdomain_markers: ["tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"]
+
+db:
+  driver: sqlite             # sqlite | postgres
+  dsn: ./data/lampa-go.db    # or postgres://user:pass@host/lampa
+  max_open_conns: 25         # postgres pool; sqlite forces 1 (single writer)
+  max_idle_conns: 5          # 0 means "no idle connections" (database/sql semantics)
+  conn_max_lifetime: 30m     # 0 means "reuse forever"
+
+otel:
+  enable: false              # false -> noop providers, logs to stdout
+  endpoint: localhost:4317   # OTLP gRPC host:port (vmagent / collector -> VictoriaMetrics)
+  service_name: lampa-go
+  insecure: true             # no TLS on the OTLP connection
+
+log:
+  level: info                # debug | info | warn | error
+  format: text               # text | json
