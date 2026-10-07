@@ -74,7 +74,7 @@ func run() error {
 		// on the first deploy.
 		d, err := builder.NewDeployer(cfg.Server.StaticDir, cfg.Builder.KeepVersions)
 		if err != nil {
-			return err
+			return fmt.Errorf("builder deployer: %w", err)
 		}
 		if err := d.EnsureDirs(); err != nil {
 			return fmt.Errorf("prepare static dirs: %w", err)
@@ -95,6 +95,7 @@ func run() error {
 		return fmt.Errorf("build server: %w", err)
 	}
 
+	workerDone := make(chan struct{})
 	if cfg.Builder.Enabled {
 		client, err := builder.NewClient(cfg.Builder.URL, cfg.Builder.APIKey)
 		if err != nil {
@@ -102,7 +103,7 @@ func run() error {
 		}
 		meta, err := storage.NewMetaStore(db, cfg.DB.Driver)
 		if err != nil {
-			return err
+			return fmt.Errorf("builder meta store: %w", err)
 		}
 		worker, err := builder.NewWorker(builder.Deps{
 			Client:   client,
@@ -113,12 +114,18 @@ func run() error {
 			Logger:   core.Logger,
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("builder worker: %w", err)
 		}
-		go worker.Run(ctx)
+		go func() {
+			defer close(workerDone)
+			worker.Run(ctx)
+		}()
 		core.Logger.Info("builder integration enabled",
 			slog.String("url", cfg.Builder.URL),
 			slog.Duration("interval", cfg.Builder.PollInterval.Std()))
+	} else {
+		// no worker to join: pre-close so the shutdown wait falls through
+		close(workerDone)
 	}
 
 	errCh := make(chan error, 1)
@@ -143,6 +150,14 @@ func run() error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+
+	// Give a mid-reconcile worker a moment to notice the cancelled context
+	// before the deferred db.Close() runs.
+	select {
+	case <-workerDone:
+	case <-time.After(2 * time.Second):
+		core.Logger.Warn("builder worker did not stop in time")
 	}
 	return nil
 }
