@@ -15,24 +15,23 @@
 
 Шаги `make fe-update` (как в `scripts/update-frontend.sh`, команда `update`):
 
-1. **fetch** — клонировать `sources`, если клона ещё нет; `git fetch origin main`.
-2. **Сводка diff** — `diff --stat` и `--name-status` от `ORIGIN_COMMIT` до `FETCH_HEAD`.
-3. **Предупреждение о конфликтах** — пересечение файлов, трогаемых нашими патчами (из `+++ b/<path>` строк патчей), с файлами, изменёнными upstream. Предупреждение печатается и в `fe-diff`, и в `fe-update`.
-4. **Reset до нового upstream-коммита** — `checkout -f FETCH_HEAD` + `clean -fd`. `clean` удаляет untracked-файлы, включая скопированный ранее overlay (build скопирует его заново на шаге 7), но сохраняет игнорируемые пути (`node_modules/`).
-5. **Чистая сборка** — `rm -rf build dest` (gulp-newer инкрементален по mtime, файлы, удалённые upstream, остались бы в старом `build/`; апдейты редки, поэтому пересобираем с нуля; `node_modules` сохраняется).
-6. **Apply patches** — каждый `patches/NNN-*.patch` по порядку; перед применением `git apply --check`, при отказе — ошибка патча выводится и скрипт падает (см. [Разрешение конфликтов](#разрешение-конфликтов)).
-7. **Overlay** — `cp -a overlay/. sources/`.
-8. **Deps-check** — свой pinned `frontend/package-lock.json` копируется в sources; свежесть установки проверяется по штампу `node_modules/.fe-lock-stamp` (md5 от `package.json` + lockfile). Если штамп не совпал (в том числе когда upstream поменял зависимости) — переустановка `npm ci`; при рассинхроне lockfile с новым `package.json` — re-resolve с бэкапом в `package-lock.json.bak` и предупреждением «commit it».
-9. **Сборка** — `npx gulp lampa_go_build` + `npx gulp pack_github`. Таск `lampa_go_build` приходит из нашего патча `010-gulp-build-task.patch`: у upstream нет неинтерактивного таска, который собирает `dest/app.js` (дефолтный watch-таск собирает его, но не завершается), а `pack_github` без него не работает.
-10. **Атомарный deploy** — сборка (`sources/build/github/lampa`) копируется в `<deploy>.tmp`, затем подмена rename'ами: текущий каталог → `<deploy>.old`, `tmp` → `deploy`, после чего `old` удаляется. Окна с недописанным каталогом нет.
-11. **ORIGIN_COMMIT** — в файл пишется новый upstream-коммит; печатается сводка; если lockfile был пере-разрешён — предупреждение «commit it».
+1. **fetch** — клонировать `sources`, если клона ещё нет; `git fetch origin main`. Если `ORIGIN_COMMIT` совпадает с `FETCH_HEAD` и не задан `FORCE=1` — скрипт завершается с «up to date», ничего не пересобирая.
+2. **Предупреждение о конфликтах** — если upstream-коммит изменился, печатается пересечение файлов, трогаемых нашими патчами (из `+++ b/<path>` строк патчей), с файлами, изменёнными upstream. Предупреждение печатается и в `fe-diff`, и в `fe-update`; полной сводки diff **до** обновления в `fe-update` нет — для этого существует `fe-diff`.
+3. **Reset до нового upstream-коммита** — `checkout -f FETCH_HEAD` + `clean -fd`. `clean` удаляет untracked-файлы, включая скопированный ранее overlay (build скопирует его заново на шаге 6), но сохраняет игнорируемые пути (`node_modules/`).
+4. **Чистая сборка** — `rm -rf build dest` (gulp-newer инкрементален по mtime, файлы, удалённые upstream, остались бы в старом `build/`; апдейты редки, поэтому пересобираем с нуля; `node_modules` сохраняется).
+5. **Apply patches** — каждый `patches/NNN-*.patch` по порядку; перед применением `git apply --check`, при отказе — ошибка патча выводится и скрипт падает (см. [Разрешение конфликтов](#разрешение-конфликтов)).
+6. **Overlay** — `cp -a overlay/. sources/`.
+7. **Deps-check** — свой pinned `frontend/package-lock.json` копируется в sources; свежесть установки проверяется по штампу `node_modules/.fe-lock-stamp` (md5 от `package.json` + lockfile). Если штамп не совпал (в том числе когда upstream поменял зависимости) — переустановка `npm ci`; при рассинхроне lockfile с новым `package.json` — re-resolve с бэкапом в `package-lock.json.bak` и предупреждением «commit it».
+8. **Сборка** — `npx gulp lampa_go_build` + `npx gulp pack_github`. Таск `lampa_go_build` приходит из нашего патча `010-gulp-build-task.patch`: у upstream нет неинтерактивного таска, который собирает `dest/app.js` (дефолтный watch-таск собирает его, но не завершается), а `pack_github` без него не работает.
+9. **Атомарный deploy** — сборка (`sources/build/github/lampa`) копируется в `<deploy>.tmp`, затем подмена rename'ами: текущий каталог → `<deploy>.old`, `tmp` → `deploy`, после чего `old` удаляется. Окна с недописанным каталогом нет.
+10. **ORIGIN_COMMIT и сводка** — в `frontend/ORIGIN_COMMIT` пишется новый upstream-коммит; **затем** печатается сводка diff (`diff --stat` + `--name-status`) от старого до нового коммита; если lockfile был пере-разрешён — предупреждение «commit it».
 
 ## Команды
 
 | Команда | Что делает |
 |---|---|
 | `make fe-diff` | только сводка upstream-изменений с последнего апдейта + предупреждение о конфликтах патчей; ничего не собирает |
-| `make fe-update` | полный цикл: fetch → сводка → патчи → overlay → deps → build → deploy → `ORIGIN_COMMIT` |
+| `make fe-update` | полный цикл: fetch → предупреждение о конфликтах → патчи → overlay → deps → build → deploy → `ORIGIN_COMMIT` (сводка diff печатается в конце) |
 | `make fe-build` | собрать текущий `sources` + **свежий overlay** (удобно после правки overlay-файлов) |
 | `make fe-deploy` | выложить последнюю сборку в каталог деплоя |
 | `make fe-new-patch NAME=NNN-slug` | сохранить правки рабочего дерева `sources` как `patches/NNN-slug.patch` |

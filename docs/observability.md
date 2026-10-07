@@ -24,13 +24,14 @@
 
 ## Подключение к VictoriaMetrics
 
-Важно про инжест: VictoriaMetrics принимает OTLP **по HTTP** (endpoints `/opentelemetry/v1/metrics` и т.д.). OTLP **gRPC** (`:4317`) — это вход для фронта приёма: OTel Collector или vmagent. Наша схема:
+Важно про инжест: **VictoriaMetrics принимает OTLP только по HTTP** — `/opentelemetry/v1/metrics` (по умолчанию `:8428`; у vmagent тот же путь на своём `-httpListenAddr`, по умолчанию `:8429`). OTLP **gRPC**-приём в экосистеме VictoriaMetrics есть только у **VictoriaTraces**; vmagent gRPC-фронтом не является. Наш сервер экспортирует все три сигнала по OTLP gRPC (`:4317`), поэтому прямой фронт приёма для нас — **OTel Collector** (или другой gRPC-совместимый приёмник); vmagent имеет смысл только как HTTP-ретранслятор **после** collector'а.
 
 ```
-lampa-go --OTLP gRPC :4317--> collector / vmagent --OTLP HTTP--> VictoriaMetrics
+                       |--> OTLP HTTP --> VictoriaMetrics (метрики) /opentelemetry/v1/metrics
+lampa-go --OTLP gRPC--> OTel Collector
+                       |--> OTLP HTTP --> VictoriaTraces  (трейсы) /insert/opentelemetry/v1/traces
+                       |--> OTLP HTTP --> VictoriaLogs    (логи)   /insert/opentelemetry/v1/logs
 ```
-
-Метрики приходят в VictoriaMetrics; трейсы уходят в отдельное хранилище (VictoriaTraces), логи — в VictoriaLogs (см. ниже).
 
 Конфигурация lampa-go:
 
@@ -42,7 +43,7 @@ otel:
   insecure: true                      # TLS терминируется на collector'е
 ```
 
-Пример конфигурации OTel Collector (`otelcol-config.yaml`), перекладывающего все три сигнала в VictoriaMetrics по OTLP HTTP:
+Пример конфигурации OTel Collector (`otelcol-config.yaml`): принимает gRPC `:4317` и раскладывает сигналы по трём хранилищам (экспортёр `otlphttp` добавляет к endpoint'у `/v1/metrics`, `/v1/traces` или `/v1/logs`; порты в примере — дефолтные, меняются `-httpListenAddr`):
 
 ```yaml
 receivers:
@@ -51,17 +52,20 @@ receivers:
       grpc:
         endpoint: 0.0.0.0:4317
 exporters:
-  otlphttp:
-    endpoint: http://victoriametrics:8428/opentelemetry   # + /v1/metrics, /v1/traces
-services:
+  otlphttp/metrics:
+    endpoint: http://victoriametrics:8428/opentelemetry        # -> /opentelemetry/v1/metrics
+  otlphttp/traces:
+    endpoint: http://victoriatraces:10428/insert/opentelemetry # -> /insert/opentelemetry/v1/traces
+  otlphttp/logs:
+    endpoint: http://victorialogs:9428/insert/opentelemetry    # -> /insert/opentelemetry/v1/logs
+service:
   pipelines:
-    traces:  { receivers: [otlp], exporters: [otlphttp] }
-    metrics: { receivers: [otlp], exporters: [otlphttp] }
+    metrics: { receivers: [otlp], exporters: [otlphttp/metrics] }
+    traces:  { receivers: [otlp], exporters: [otlphttp/traces] }
+    logs:    { receivers: [otlp], exporters: [otlphttp/logs] }
 ```
 
-Вместо Collector можно поставить vmagent с OTLP-приёмом (фронт `:4317` и `--remoteWrite.url` в VictoriaMetrics — см. документацию vmagent).
-
-**Логи** — [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/): принимает OTLP по HTTP (`/opentelemetry/v1/logs`); достаточно добавить в Collector pipeline `logs` с отдельным экспортёром на endpoint VictoriaLogs.
+vmagent вместо VictoriaMetrics в качестве получателя метрик — вариант той же схемы: collector → vmagent по OTLP HTTP → VictoriaMetrics по remote write; сам vmagent нашим OTLP gRPC не принимает.
 
 **Ошибки самого OTel SDK** (недоступный endpoint, ошибки экспорта) пишутся специальным stdout-only логгером — они **не** заводятся обратно в `core.Logger`, чтобы не ре-энтерить пайплайн экспорта логов (иначе ошибка отправки логов породила бы новую запись лога и так по кругу).
 

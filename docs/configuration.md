@@ -73,7 +73,7 @@
 
 ## OTel
 
-`otel.enable: true` требует заполненных `endpoint` и `service_name` — иначе ошибка валидации на старте. `endpoint` — строго `host:port` для OTLP gRPC (значение со схемой отвергается). `insecure: true` отключает TLS на соединении с коллектором. Подробности и схема с VictoriaMetrics — [observability.md](observability.md).
+`otel.enable: true` требует заполненных `endpoint` и `service_name` — иначе ошибка валидации на старте. `endpoint` — строго `host:port` для OTLP gRPC (значение со схемой отвергается). Все эти проверки выполняются **только при `otel.enable: true`**: при `enable: false` конфигурация OTel не валидируется и не используется вовсе (noop-провайдеры). `insecure: true` отключает TLS на соединении с коллектором. Подробности и схема с VictoriaMetrics — [observability.md](observability.md).
 
 ## Log
 
