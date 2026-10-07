@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"lampa-go/internal/config"
 	"lampa-go/internal/storage"
@@ -27,6 +29,7 @@ type fakeBuilder struct {
 	available    string
 	buildStatus  string // what GET /builds/{id} reports
 	buildErrCode int    // status code for POST /builds (0 = 202)
+	badBuildID   string // when set, POST /builds returns it as build_id
 	starts       int
 	t            *testing.T
 }
@@ -44,13 +47,23 @@ func (f *fakeBuilder) handler() http.Handler {
 				w.WriteHeader(f.buildErrCode)
 				return
 			}
+			id := "b-1"
+			if f.badBuildID != "" {
+				id = f.badBuildID
+			}
 			w.WriteHeader(http.StatusAccepted)
-			w.Write([]byte(`{"build_id":"b-1","cached":false}`))
+			w.Write([]byte(`{"build_id":"` + id + `","cached":false}`))
 		case r.URL.Path == "/api/v1/builds/b-1":
 			w.Write([]byte(`{"id":"b-1","commit":"` + f.available + `","status":"` + f.buildStatus + `"}`))
 		case r.URL.Path == "/api/v1/builds/b-1/archive":
 			archive := filepath.Join(f.t.TempDir(), "a.tar.gz")
-			f.writeArchive(archive)
+			if err := f.writeArchive(archive); err != nil {
+				// t.Fatalf must not be called from a non-test goroutine;
+				// report and fail the request instead.
+				f.t.Errorf("create archive: %v", err)
+				http.Error(w, "fixture failure", http.StatusInternalServerError)
+				return
+			}
 			http.ServeFile(w, r, archive)
 		default:
 			http.NotFound(w, r)
@@ -58,10 +71,10 @@ func (f *fakeBuilder) handler() http.Handler {
 	})
 }
 
-func (f *fakeBuilder) writeArchive(dest string) {
+func (f *fakeBuilder) writeArchive(dest string) error {
 	f2, err := os.Create(dest)
 	if err != nil {
-		f.t.Fatal(err)
+		return err
 	}
 	defer f2.Close()
 	gz := gzip.NewWriter(f2)
@@ -71,6 +84,7 @@ func (f *fakeBuilder) writeArchive(dest string) {
 	content := "index for " + f.available
 	tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "index.html", Size: int64(len(content)), Mode: 0o644})
 	tw.Write([]byte(content))
+	return nil
 }
 
 // newTestWorker wires a worker against a fake builder and a fresh sqlite DB.
@@ -105,14 +119,32 @@ func newTestWorker(t *testing.T, f *fakeBuilder) (*Worker, *Deployer, *storage.M
 	if err := d.EnsureDirs(); err != nil {
 		t.Fatalf("EnsureDirs: %v", err)
 	}
-	w := NewWorker(Deps{
+	w, err := NewWorker(Deps{
 		Client:   client,
 		Deployer: d,
 		Meta:     meta,
 		Domain:   "lampa.example.com",
+		Interval: time.Minute,
 		Logger:   testLogger(),
 	})
+	if err != nil {
+		t.Fatalf("NewWorker: %v", err)
+	}
 	return w, d, meta
+}
+
+// TestNewWorkerValidation covers the interval guard: a non-positive cadence
+// would make Run's ticker panic, so it must be rejected at construction.
+func TestNewWorkerValidation(t *testing.T) {
+	if _, err := NewWorker(Deps{Interval: 0}); err == nil {
+		t.Error("NewWorker with zero Interval must fail")
+	}
+	if _, err := NewWorker(Deps{Interval: -time.Minute}); err == nil {
+		t.Error("NewWorker with negative Interval must fail")
+	}
+	if _, err := NewWorker(Deps{Interval: time.Minute}); err != nil {
+		t.Errorf("NewWorker with valid Interval: %v", err)
+	}
 }
 
 func TestReconcileFirstDeploy(t *testing.T) {
@@ -163,6 +195,31 @@ func TestReconcileUpdatesToNewCommit(t *testing.T) {
 	got, _ := meta.Get(context.Background(), deployedCommitKey)
 	if got != "bbb" {
 		t.Errorf("deployed_commit = %q, want bbb", got)
+	}
+}
+
+func TestReconcileRejectsBadBuildID(t *testing.T) {
+	f := &fakeBuilder{
+		available:   "aaa",
+		buildStatus: BuildSuccess,
+		badBuildID:  "../evil",
+		t:           t,
+	}
+	w, d, meta := newTestWorker(t, f)
+
+	err := w.Reconcile(context.Background())
+	if err == nil {
+		t.Fatal("Reconcile must reject a crafted build id")
+	}
+	if !strings.Contains(err.Error(), "bad build id") {
+		t.Fatalf("error = %v, want it to mention bad build id", err)
+	}
+	if _, serr := os.Lstat(d.StaticDir); serr == nil {
+		t.Error("nothing must be deployed for a bad build id")
+	}
+	got, gerr := meta.Get(context.Background(), deployedCommitKey)
+	if gerr != nil || got != "" {
+		t.Errorf("deployed_commit = (%q, %v), want empty", got, gerr)
 	}
 }
 

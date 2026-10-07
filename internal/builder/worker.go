@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -41,11 +42,15 @@ type Deps struct {
 }
 
 // NewWorker builds a Worker; a nil logger falls back to slog.Default().
-func NewWorker(d Deps) *Worker {
+// Interval must be positive: it drives the reconcile ticker.
+func NewWorker(d Deps) (*Worker, error) {
+	if d.Interval <= 0 {
+		return nil, fmt.Errorf("builder worker interval must be positive, got %s", d.Interval)
+	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	return &Worker{d: d}
+	return &Worker{d: d}, nil
 }
 
 // Run reconciles on every tick until ctx is done.
@@ -57,7 +62,7 @@ func (w *Worker) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := w.Reconcile(ctx); err != nil {
+			if err := w.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				w.d.Logger.Warn("builder reconcile", slog.Any("error", err))
 			}
 		}
@@ -95,6 +100,11 @@ func (w *Worker) Reconcile(ctx context.Context) error {
 	ref, err := w.d.Client.StartBuild(ctx, w.d.Domain)
 	if err != nil {
 		return fmt.Errorf("order build: %w", err)
+	}
+	// The build id names the downloaded archive file under Root; treat it
+	// with the same distrust as a commit name.
+	if err := validVersionName(ref.BuildID); err != nil {
+		return fmt.Errorf("builder returned bad build id: %w", err)
 	}
 	w.d.Logger.Info("build ordered", slog.String("id", ref.BuildID), slog.Bool("cached", ref.Cached))
 
