@@ -130,3 +130,43 @@ func TestMigratePostgres(t *testing.T) {
 		t.Fatalf("Migrate (second run): %v", err)
 	}
 }
+
+func TestMetaStore(t *testing.T) {
+	cfg := config.Defaults().DB
+	cfg.DSN = filepath.Join(t.TempDir(), "app.db")
+	db, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	if err := Migrate(context.Background(), db, cfg.Driver); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	ctx := context.Background()
+	meta, err := NewMetaStore(db, cfg.Driver)
+	if err != nil {
+		t.Fatalf("NewMetaStore: %v", err)
+	}
+
+	// Absent key reads as empty, without error.
+	v, err := meta.Get(ctx, "builder.deployed_commit")
+	if err != nil || v != "" {
+		t.Fatalf("Get absent = (%q, %v), want (\"\", nil)", v, err)
+	}
+
+	if err := meta.Set(ctx, "builder.deployed_commit", "abc123"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := meta.Set(ctx, "builder.deployed_commit", "def456"); err != nil {
+		t.Fatalf("Set (upsert): %v", err)
+	}
+	v, err = meta.Get(ctx, "builder.deployed_commit")
+	if err != nil || v != "def456" {
+		t.Fatalf("Get = (%q, %v), want (def456, nil)", v, err)
+	}
+
+	if _, err := NewMetaStore(db, "mysql"); err == nil {
+		t.Fatal("expected error for unknown driver")
+	}
+}

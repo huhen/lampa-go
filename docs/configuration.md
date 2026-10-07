@@ -24,6 +24,26 @@
 | `cub.geo_default` | string | `US` | fallback, когда заголовка нет |
 | `cub.subdomain_markers` | []string | `["tmdb","geo","ws","imagetmdb","cdn","ad"]` | первый сегмент пути после `/cub/`, превращающий upstream-хост в `<marker>.<upstream-host>` |
 
+### builder
+
+Интеграция с [lampa-web-builder](https://github.com/huhen/lampa-web-builder): lampa-go сам
+сверяет свой задеплоенный коммит фронта с `available_commit` билдера, заказывает сборку,
+скачивает архив и атомарно выкладывает его (symlink-swap).
+
+| Ключ | По умолчанию | Значение |
+|---|---|---|
+| `enabled` | `false` | включить воркер обновления фронта |
+| `url` | `http://builder:8080` | адрес API билдера; в compose — имя сервиса |
+| `api_key` | — | ключ `X-API-Key`; обязателен при `enabled: true` |
+| `poll_interval` | `5m` | как часто сверяться с билдером |
+| `keep_versions` | `3` | сколько версий хранить в `<корень static_dir>/versions/` |
+
+При `enabled: true` обязательны `server.base_domain` — им становится домен заказываемой
+сборки. `server.static_dir` должен указывать на путь **symlink'а** (например,
+`./deploy/web/current`): билдер-воркер кладёт версии в `<корень>/versions/<commit>/` и
+атомарно переименовывает symlink; если `static_dir` — обычный каталог, старт падает с
+подсказкой (см. deploy.md про миграцию).
+
 ### db
 
 | Ключ | Тип | Default | Описание |

@@ -5,9 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql
@@ -102,6 +104,50 @@ func Migrate(ctx context.Context, db *sql.DB, driver string) error {
 	}
 	if err := goose.UpContext(ctx, db, "migrations"); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
+	}
+	return nil
+}
+
+// MetaStore reads and writes the app_meta key-value table.
+// It exists since migration 00001 and stores single-string app state
+// (currently: builder.deployed_commit).
+type MetaStore struct {
+	db *sql.DB
+	ph func(n int) string // positional placeholder: "?" or "$1"
+}
+
+// NewMetaStore builds a MetaStore for the given driver.
+func NewMetaStore(db *sql.DB, driver string) (*MetaStore, error) {
+	switch driver {
+	case config.DriverSQLite, "":
+		return &MetaStore{db: db, ph: func(int) string { return "?" }}, nil
+	case config.DriverPostgres:
+		return &MetaStore{db: db, ph: func(n int) string { return "$" + strconv.Itoa(n) }}, nil
+	default:
+		return nil, fmt.Errorf("unknown db driver %q", driver)
+	}
+}
+
+// Get returns the value for key; an absent key reads as ("", nil).
+func (m *MetaStore) Get(ctx context.Context, key string) (string, error) {
+	q := "SELECT value FROM app_meta WHERE key = " + m.ph(1)
+	var v string
+	err := m.db.QueryRowContext(ctx, q, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get meta %q: %w", key, err)
+	}
+	return v, nil
+}
+
+// Set inserts or updates the value for key.
+func (m *MetaStore) Set(ctx context.Context, key, value string) error {
+	q := "INSERT INTO app_meta (key, value) VALUES (" + m.ph(1) + ", " + m.ph(2) + ")" +
+		" ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+	if _, err := m.db.ExecContext(ctx, q, key, value); err != nil {
+		return fmt.Errorf("set meta %q: %w", key, err)
 	}
 	return nil
 }

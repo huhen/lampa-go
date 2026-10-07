@@ -66,3 +66,54 @@ func TestHandler(t *testing.T) {
 		})
 	}
 }
+
+// The builder integration swaps the frontend by renaming a symlink that
+// static_dir points at. os.DirFS must re-resolve it on every request so
+// the swap is atomic for clients (issue #7).
+func TestHandlerFollowsSymlinkSwap(t *testing.T) {
+	root := t.TempDir()
+	write := func(version, body string) {
+		dir := filepath.Join(root, "versions", version)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("aaa", "<html>version-aaa</html>")
+	write("bbb", "<html>version-bbb</html>")
+
+	current := filepath.Join(root, "current")
+	if err := os.Symlink(filepath.Join("versions", "aaa"), current); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(current)
+
+	get := func() string {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	if got := get(); got != "<html>version-aaa</html>" {
+		t.Fatalf("before swap = %q", got)
+	}
+
+	// Atomic swap, same technique as Deployer.Swap.
+	tmp := filepath.Join(root, ".swap-tmp")
+	if err := os.Symlink(filepath.Join("versions", "bbb"), tmp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, current); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := get(); got != "<html>version-bbb</html>" {
+		t.Fatalf("after swap = %q, want version-bbb", got)
+	}
+}

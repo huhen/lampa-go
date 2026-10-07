@@ -1,12 +1,13 @@
 # lampa-go configuration example.
 # Copy to config.yaml and adjust. All keys except `server.base_domain`
-# have built-in defaults (base_domain is empty by default and consumed
-# only by the future frontend patch); unknown keys are rejected at
-# startup (strict parsing).
+# have built-in defaults (base_domain is empty by default; it is required
+# when builder.enabled is true, where it is the build domain). When
+# builder.enabled is true, builder.api_key is required too. Unknown keys
+# are rejected at startup (strict parsing).
 
 server:
   listen: ":8080"            # address to listen on (behind a reverse proxy)
-  static_dir: ./deploy/web   # directory with the built Lampa frontend
+  static_dir: ./deploy/web   # built frontend; with builder.enabled use ./deploy/web/current (a symlink path)
   base_domain: lampa.example.com  # our public domain (used by frontend patches)
 
 cub:
@@ -15,6 +16,13 @@ cub:
   geo_header: X-Geo-Country  # client country header set by the reverse proxy
   geo_default: US            # fallback when the header is missing
   subdomain_markers: ["tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"]
+
+builder:
+  enabled: false             # enable the lampa-web-builder update worker
+  url: http://builder:8080   # builder API (compose service name; loopback: http://127.0.0.1:8081)
+  api_key: change-me         # X-API-Key for the builder (required when enabled)
+  poll_interval: 5m          # how often to compare available_commit with ours
+  keep_versions: 3           # extracted versions to keep under <static_dir>/../versions
 
 db:
   driver: sqlite             # sqlite | postgres

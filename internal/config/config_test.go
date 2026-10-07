@@ -141,3 +141,81 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		}
 	}
 }
+
+func TestBuilderDefaults(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Builder.Enabled {
+		t.Error("builder must be disabled by default")
+	}
+	if cfg.Builder.URL != "http://builder:8080" {
+		t.Errorf("builder url = %q, want http://builder:8080", cfg.Builder.URL)
+	}
+	if cfg.Builder.PollInterval.Std() != 5*time.Minute {
+		t.Errorf("poll_interval = %v, want 5m", cfg.Builder.PollInterval.Std())
+	}
+	if cfg.Builder.KeepVersions != 3 {
+		t.Errorf("keep_versions = %d, want 3", cfg.Builder.KeepVersions)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("defaults must be valid: %v", err)
+	}
+}
+
+func TestLoadBuilderSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `
+server:
+  base_domain: lampa.example.com
+builder:
+  enabled: true
+  url: http://127.0.0.1:8081
+  api_key: secret
+  poll_interval: 1m
+  keep_versions: 2
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Builder.Enabled || cfg.Builder.APIKey != "secret" || cfg.Builder.KeepVersions != 2 {
+		t.Errorf("builder section parsed wrong: %+v", cfg.Builder)
+	}
+	if cfg.Builder.PollInterval.Std() != time.Minute {
+		t.Errorf("poll_interval = %v, want 1m", cfg.Builder.PollInterval.Std())
+	}
+}
+
+func TestValidateBuilderRequiresFields(t *testing.T) {
+	cases := []func(*Config){
+		func(c *Config) { c.Builder.Enabled = true },                         // no api_key
+		func(c *Config) { c.Builder.Enabled = true; c.Builder.APIKey = "k" }, // no base_domain
+		func(c *Config) {
+			c.Builder.Enabled = true
+			c.Builder.APIKey = "k"
+			c.Server.BaseDomain = "d"
+			c.Builder.URL = "builder:8080"
+		}, // no scheme
+		func(c *Config) {
+			c.Builder.Enabled = true
+			c.Builder.APIKey = "k"
+			c.Server.BaseDomain = "d"
+			c.Builder.PollInterval = Duration(0)
+		},
+		func(c *Config) {
+			c.Builder.Enabled = true
+			c.Builder.APIKey = "k"
+			c.Server.BaseDomain = "d"
+			c.Builder.KeepVersions = 1
+		},
+	}
+	for i, breakFn := range cases {
+		cfg := Defaults()
+		breakFn(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("case %d: expected validation error", i)
+		}
+	}
+}

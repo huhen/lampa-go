@@ -60,6 +60,15 @@ type Cub struct {
 	SubdomainMarkers []string `yaml:"subdomain_markers"`
 }
 
+// Builder holds the lampa-web-builder integration settings.
+type Builder struct {
+	Enabled      bool     `yaml:"enabled"`
+	URL          string   `yaml:"url"`
+	APIKey       string   `yaml:"api_key"`
+	PollInterval Duration `yaml:"poll_interval"`
+	KeepVersions int      `yaml:"keep_versions"`
+}
+
 // DB holds database settings.
 type DB struct {
 	Driver          string   `yaml:"driver"`
@@ -85,11 +94,12 @@ type Log struct {
 
 // Config is the root configuration.
 type Config struct {
-	Server Server `yaml:"server"`
-	Cub    Cub    `yaml:"cub"`
-	DB     DB     `yaml:"db"`
-	OTel   OTel   `yaml:"otel"`
-	Log    Log    `yaml:"log"`
+	Server  Server  `yaml:"server"`
+	Cub     Cub     `yaml:"cub"`
+	Builder Builder `yaml:"builder"`
+	DB      DB      `yaml:"db"`
+	OTel    OTel    `yaml:"otel"`
+	Log     Log     `yaml:"log"`
 }
 
 // Defaults returns the built-in default configuration.
@@ -102,6 +112,11 @@ func Defaults() Config {
 			GeoHeader:        "X-Geo-Country",
 			GeoDefault:       "US",
 			SubdomainMarkers: []string{"tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"},
+		},
+		Builder: Builder{
+			URL:          "http://builder:8080",
+			PollInterval: Duration(5 * time.Minute),
+			KeepVersions: 3,
 		},
 		DB: DB{
 			Driver:          DriverSQLite,
@@ -193,6 +208,25 @@ func (c *Config) Validate() error {
 		}
 		if strings.Contains(c.OTel.Endpoint, "://") {
 			return fmt.Errorf("otel.endpoint must be host:port for OTLP gRPC, got %q", c.OTel.Endpoint)
+		}
+	}
+	if c.Builder.Enabled {
+		u, err := url.Parse(c.Builder.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("builder.url must be an http(s) URL, got %q", c.Builder.URL)
+		}
+		if c.Builder.APIKey == "" {
+			return errors.New("builder.api_key is required when builder.enabled is true")
+		}
+		if c.Server.BaseDomain == "" {
+			return errors.New("server.base_domain is required when builder.enabled is true (it is the build domain)")
+		}
+		if c.Builder.PollInterval.Std() <= 0 {
+			return errors.New("builder.poll_interval must be positive")
+		}
+		// Rollback needs the previous version to stay on disk.
+		if c.Builder.KeepVersions < 2 {
+			return errors.New("builder.keep_versions must be at least 2")
 		}
 	}
 	return nil
