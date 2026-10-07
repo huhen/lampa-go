@@ -106,7 +106,7 @@ RequestID → OTel trace context → slog-логирование (с `trace_id`)
 - таймаут `{cub.timeout}` через `context`; стриминг тела без буферизации (`FlushInterval = -1`);
 - без ретраев, circuit breaker и кеша — YAGNI для каркаса.
 
-Поддоменные маркеры: первый сегмент пути из множества `{tmdb, geo, ws, imagetmdb, cdn, ad}` → поддомен приписывается к хосту upstream (`/cub/tmdb/3/x` → `https://tmdb.cub.best/3/x`). Множество — конфиг `{cub.subdomain_markers}`.
+Поддоменные маркеры: первый сегмент пути из множества `{tmdb, geo, ws, imagetmdb, cdn, ad}` → поддомен приписывается к хосту upstream (`/cub/tmdb/3/x` → `https://tmdb.<upstream-host>/3/x`). Множество — конфиг `{cub.subdomain_markers}`.
 
 ### 5.4 Статика (`internal/web`)
 
@@ -148,7 +148,7 @@ server:
   static_dir: ./deploy/web
   base_domain: lampa.example.com   # наш домен (подставляется в патчи/rewrite)
 cub:
-  upstream: https://cub.best
+  upstream: <built-in default — see internal/config>
   timeout: 15s
   geo_header: X-Geo-Country
   geo_default: US

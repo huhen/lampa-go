@@ -10,7 +10,7 @@ server:
   base_domain: lampa.example.com  # our public domain (used by frontend patches)
 
 cub:
-  upstream: https://cub.best # upstream the /cub/* requests are forwarded to
+  upstream: https://cub.example # upstream the /cub/* requests are forwarded to (built-in default: see internal/config)
   timeout: 15s               # caps the whole exchange incl. the response body
   geo_header: X-Geo-Country  # client country header set by the reverse proxy
   geo_default: US            # fallback when the header is missing

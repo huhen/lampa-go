@@ -52,7 +52,7 @@ requestID → observe (trace + metrics + request log) → recover → mux
 `internal/cubproxy` — `httputil.ReverseProxy` в режиме `Rewrite`:
 
 - **Path-preserving**: `/cub/<suffix>` → `<upstream>/<suffix>`; префикс `/cub/` срезается, остальное переносится как есть.
-- **Subdomain markers**: если первый сегмент suffix входит в `cub.subdomain_markers` (по умолчанию `tmdb`, `geo`, `ws`, `imagetmdb`, `cdn`, `ad`; сравнение case-insensitive), апстрим-хост становится `<marker>.<upstream-host>`, а маркер убирается из пути: `/cub/tmdb/3/movie/1` → `https://tmdb.cub.best/3/movie/1`. Обратите внимание: маркер приклеивается к `upstream.Host` **вместе с портом** — для продакшена upstream должен быть без порта (или `:443`), чтобы `tmdb.<host>` резолвился корректно.
+- **Subdomain markers**: если первый сегмент suffix входит в `cub.subdomain_markers` (по умолчанию `tmdb`, `geo`, `ws`, `imagetmdb`, `cdn`, `ad`; сравнение case-insensitive), апстрим-хост становится `<marker>.<upstream-host>`, а маркер убирается из пути: `/cub/tmdb/3/movie/1` → `https://tmdb.<upstream-host>/3/movie/1`. Обратите внимание: маркер приклеивается к `upstream.Host` **вместе с портом** — для продакшена upstream должен быть без порта (или `:443`), чтобы `tmdb.<host>` резолвился корректно.
 - **Схема** — всегда схема upstream (`pr.Out.URL.Scheme = p.upstream.Scheme`), строгая, без даунгрейда.
 - **Anti-spoof**: `pr.SetXForwarded()`. Перед `Rewrite` stdlib сам удаляет клиентские `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`; после этого `SetXForwarded` ставит `X-Forwarded-For` = адрес непосредственного пира, `X-Forwarded-Host` = клиентский `Host`, а `X-Forwarded-Proto` = `https`/`http` по признаку `In.TLS`. Так как lampa-go слушает plain HTTP, `X-Forwarded-Proto` к upstream уходит **всегда `http`** — см. замечание в [deploy.md](deploy.md).
 - **Query** санитизируется stdlib'ом: перед `Rewrite` `RawQuery` прогоняется через `cleanQueryParams` (отбрасываются unparsable параметры — «голые» `;`, невалидные escape). Копировать `pr.In.URL.RawQuery` обратно нельзя — это отменило бы санитизацию.
@@ -62,10 +62,10 @@ requestID → observe (trace + metrics + request log) → recover → mux
 
 ## Попадание фронтенда под /cub/
 
-Фронт из коробки ходит на зеркала куба (`cub.best`, `cub.black`, `durex.monster`, `cubnotrip.top` и их поддомены — см. `cub_mirrors` в `src/core/manifest.js` upstream). Чтобы трафик попал на наш домен, в overlay лежит `public/plugins/modification.js`:
+Фронт из коробки ходит на зеркала куба, перечисленные в `cub_mirrors` в `src/core/manifest.js` upstream (и их поддомены). Чтобы трафик попал на наш домен, в overlay лежит `public/plugins/modification.js`:
 
 - Lampa автоматически загружает `plugins/modification.js` с хостинга (см. `src/core/plugins.js` upstream) — патчить загрузчик не нужно;
-- плагин подписан на `Lampa.Listener.follow('request_before')` и переписывает URL к зеркалам куба **и к собственному домену** в `<origin>/cub/<marker?>/<path>` (маркер — тот же список: `tmdb`, `geo`, `ws`, `imagetmdb`, `cdn`, `ad`; учитываются и поддомены вида `tmdb.cub.best`);
+- плагин подписан на `Lampa.Listener.follow('request_before')` и переписывает URL к зеркалам куба **и к собственному домену** в `<origin>/cub/<marker?>/<path>` (маркер — тот же список: `tmdb`, `geo`, `ws`, `imagetmdb`, `cdn`, `ad`; учитываются и поддомены зеркал вида `tmdb.<зеркало>`);
 - расчёт `origin` устойчив к старым webview (Orsay, ранний webOS), где нет `location.origin`.
 
 Ожидаемый будущий патч `src/core/manifest.js` (`cub_mirrors = ['<наш домен>']`) сделает наш домен «родным» зеркалом: тогда URL будет строиться сразу на наш домен без runtime-переписывания. Патч **пока не создан** — боевой домен не выбран; как его создать, описано в [frontend-update.md](frontend-update.md).

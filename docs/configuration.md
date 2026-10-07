@@ -18,7 +18,7 @@
 
 | Ключ | Тип | Default | Описание |
 |---|---|---|---|
-| `cub.upstream` | string | `https://cub.best` | upstream для `/cub/*`; схема строго переносится в запрос, хост может заменяться subdomain-маркером (`tmdb.<host>`). Для продакшена — без порта (или `:443`), см. [deploy.md](deploy.md) |
+| `cub.upstream` | string | см. `internal/config` | upstream для `/cub/*`; схема строго переносится в запрос, хост может заменяться subdomain-маркером (`tmdb.<host>`). Для продакшена — без порта (или `:443`), см. [deploy.md](deploy.md) |
 | `cub.timeout` | duration | `15s` | таймаут всего обмена с upstream, включая прокачку response body; должен быть > 0 |
 | `cub.geo_header` | string | `X-Geo-Country` | заголовок, из которого заглушка `/cub/geo` берёт страну клиента (ставит reverse-proxy) |
 | `cub.geo_default` | string | `US` | fallback, когда заголовка нет |
