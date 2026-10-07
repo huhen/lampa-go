@@ -57,12 +57,17 @@ upstream_head() {
   git -C "$SOURCES" rev-parse FETCH_HEAD
 }
 
-# Files touched by our patches (from the '+++ b/<path>' header lines).
+# Files touched by a single patch file (from the '+++ b/<path>' header lines).
+patch_files_of() {
+  awk '/^\+\+\+ b\//{sub(/^\+\+\+ b\//, ""); print}' "$1"
+}
+
+# Files touched by our patches.
 patch_files() {
   local patch
   for patch in "$PATCH_DIR"/*.patch; do
     [ -e "$patch" ] || return 0
-    awk '/^\+\+\+ b\//{sub(/^\+\+\+ b\//, ""); print}' "$patch"
+    patch_files_of "$patch"
   done
 }
 
@@ -257,14 +262,28 @@ cmd_new_patch() {
   git -C "$SOURCES" add -N -A
 
   # Diff new changes only ('diff HEAD' also captures already-staged edits):
-  # exclude build churn, everything already covered by existing patches (after
-  # an update they sit uncommitted in the tree), and overlay-delivered files
-  # (they are re-copied on every update anyway).
+  # exclude build churn, everything covered by OTHER patches (after an update
+  # they sit uncommitted in the tree), and overlay-delivered files (they are
+  # re-copied on every update anyway).
+  #
+  # Files of the patch being written are NOT excluded: re-running new-patch
+  # with an existing NAME re-captures those files in full (the patch's own
+  # hunks plus the new edits) and overwrites the file — that is how a
+  # conflicted patch gets refreshed. Editing files of other patches is out of
+  # scope here: save those with new-patch under their own names.
   local excludes=()
   excludes+=(":(exclude)index/github/assembly.json")
+  local own=""
+  if [ -f "$PATCH_DIR/$name.patch" ]; then
+    own="$(patch_files_of "$PATCH_DIR/$name.patch" | sort -u)"
+  fi
   local f
   while IFS= read -r f; do
-    [ -n "$f" ] && excludes+=(":(exclude)$f")
+    [ -n "$f" ] || continue
+    if [ -n "$own" ] && grep -qxF -- "$f" <<<"$own"; then
+      continue
+    fi
+    excludes+=(":(exclude)$f")
   done < <(patch_files | sort -u)
   while IFS= read -r f; do
     [ -n "$f" ] && excludes+=(":(exclude)${f#./}")

@@ -57,14 +57,16 @@ func (c *Core) Shutdown(ctx context.Context) error {
 	var errs []error
 	for i := len(c.shutdown) - 1; i >= 0; i-- {
 		runCtx := ctx
+		cancel := func() {}
 		if !hasDeadline {
-			var cancel context.CancelFunc
 			runCtx, cancel = context.WithTimeout(context.Background(), providerShutdownBudget)
-			defer cancel()
 		}
 		if err := c.shutdown[i](runCtx); err != nil {
 			errs = append(errs, err)
 		}
+		// Release each timeout context as soon as its provider is done, not
+		// when Shutdown returns.
+		cancel()
 	}
 	return errors.Join(errs...)
 }

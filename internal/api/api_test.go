@@ -82,6 +82,24 @@ func TestRegister(t *testing.T) {
 		}
 	})
 
+	// The body is form-urlencoded: the reply must carry the decoded value so
+	// the client's str == random comparison matches the original token.
+	t.Run("checker post decodes url-encoded value", func(t *testing.T) {
+		rec := do(t, mux, http.MethodPost, "/cub/api/checker",
+			"data=0.5%20a%2Bb%26c", "application/x-www-form-urlencoded")
+		if rec.Code != http.StatusOK || rec.Body.String() != "0.5 a+b&c" {
+			t.Fatalf("checker post decode: %d %q", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("checker post rejects bad percent-encoding", func(t *testing.T) {
+		rec := do(t, mux, http.MethodPost, "/cub/api/checker",
+			"data=%ZZ", "application/x-www-form-urlencoded")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("checker post bad escape: %d, want 400", rec.Code)
+		}
+	})
+
 	t.Run("checker post rejects non-form content type", func(t *testing.T) {
 		rec := do(t, mux, http.MethodPost, "/cub/api/checker", "{}", "application/json")
 		if rec.Code != http.StatusBadRequest {

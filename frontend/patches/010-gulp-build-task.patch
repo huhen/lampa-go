@@ -1,8 +1,8 @@
 diff --git a/gulpfile.js b/gulpfile.js
-index 41ca49b4..d5e45093 100644
+index 41ca49b4..3e5c979 100644
 --- a/gulpfile.js
 +++ b/gulpfile.js
-@@ -421,3 +421,30 @@ exports.default = parallel(watch, browser_sync);
+@@ -421,3 +421,32 @@ exports.default = parallel(watch, browser_sync);
  exports.debug = series(enable_debug_mode, this.default)
  exports.doc = series(sync_doc, buildDoc)
  exports.write_manifest = series(write_manifest)
@@ -11,8 +11,10 @@ index 41ca49b4..d5e45093 100644
 +// The stock flow produces dest/app.js only from the default watch task,
 +// which never exits, and merge() calls done() before the rollup stream has
 +// flushed, so poll for the bundle: two consecutive polls (250 ms apart) with
-+// an equal non-zero file size mean the write has settled.
++// an equal non-zero file size mean the write has settled. A stale bundle from
++// a previous build would satisfy the poll instantly, so drop it first.
 +function lampa_go_build(done) {
++    fs.rmSync(dstFolder + 'app.js', { force: true })
 +    merge(function() {})
 +    let started = Date.now()
 +    let last_size = -1

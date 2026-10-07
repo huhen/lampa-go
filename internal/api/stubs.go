@@ -4,6 +4,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -11,7 +12,7 @@ import (
 const maxCheckerBody = 1 << 20
 
 // checker answers the Lampa mirror liveness probe locally:
-// GET returns "ok", POST echoes back the first form value.
+// GET returns "ok", POST echoes back the URL-decoded first form value.
 func checker(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -39,7 +40,14 @@ func checker(w http.ResponseWriter, r *http.Request) {
 	if j := strings.IndexByte(value, '&'); j >= 0 {
 		value = value[:j]
 	}
-	_, _ = w.Write([]byte(value))
+	// The body is form-urlencoded: the client compares the reply against the
+	// original (decoded) value, so undo the encoding before echoing.
+	decoded, err := url.QueryUnescape(value)
+	if err != nil {
+		http.Error(w, "error", http.StatusBadRequest)
+		return
+	}
+	_, _ = w.Write([]byte(decoded))
 }
 
 // blacklist returns an empty plugin blacklist.
