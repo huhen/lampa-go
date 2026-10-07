@@ -4,7 +4,7 @@ BINARY := bin/lampa-go
 # Deploy directory for the frontend pipeline; exported so that
 # scripts/update-frontend.sh (which reads FE_DEPLOY_DIR from the environment)
 # and make agree on one name.
-export FE_DEPLOY_DIR ?= deploy/web
+export FE_DEPLOY_DIR ?= $(abspath deploy/web)
 
 .PHONY: all build run test vet fmt smoke clean \
 	fe-diff fe-update fe-build fe-deploy fe-new-patch

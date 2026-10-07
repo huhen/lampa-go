@@ -25,12 +25,17 @@ OVERLAY_DIR="$FRONTEND/overlay"
 ORIGIN_FILE="$FRONTEND/ORIGIN_COMMIT"
 LOCK_FILE="$FRONTEND/package-lock.json"
 DEPLOY_DIR="${FE_DEPLOY_DIR:-$ROOT/deploy/web}"
+# A trailing slash would make '$DEPLOY_DIR.tmp' land inside the target.
+DEPLOY_DIR="${DEPLOY_DIR%/}"
 UPSTREAM="https://github.com/yumata/lampa-source.git"
 BRANCH="main"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR\033[0m %s\n' "$*" >&2; exit 1; }
+
+TMP_ERR="$(mktemp)"
+trap 'rm -f "$TMP_ERR"' EXIT
 
 origin_commit() {
   if [ -f "$ORIGIN_FILE" ]; then cat "$ORIGIN_FILE"; fi
@@ -127,30 +132,41 @@ install_deps() {
   log "installing npm dependencies (npm ci from the pinned lockfile)"
   cp "$LOCK_FILE" "$SOURCES/package-lock.json"
   if ! (cd "$SOURCES" && npm ci --no-audit --no-fund); then
-    # 'npm ci' refuses to run when the lockfile is out of sync with
-    # package.json — that means upstream changed its dependencies, so
-    # re-resolve the pinned lockfile and retry.
+    # Re-resolve only on a real lockfile/package.json desync, not on any npm
+    # ci failure (a plain network error must not drift the committed pin).
+    log "npm ci failed — checking whether the lockfile is out of sync"
+    if (cd "$SOURCES" && npm ci --dry-run --no-audit --no-fund); then
+      die "npm ci failed but the lockfile is in sync — see the npm error above"
+    fi
     log "lockfile out of sync with upstream package.json — re-resolving"
+    cp "$LOCK_FILE" "$LOCK_FILE.bak"
     (cd "$SOURCES" && npm install --package-lock-only --no-audit --no-fund)
     cp "$SOURCES/package-lock.json" "$LOCK_FILE"
     log "updated $LOCK_FILE — commit it to keep installs reproducible"
-    (cd "$SOURCES" && npm ci --no-audit --no-fund)
+    if (cd "$SOURCES" && npm ci --no-audit --no-fund); then
+      rm -f "$LOCK_FILE.bak"
+    else
+      mv "$LOCK_FILE.bak" "$LOCK_FILE"
+      die "npm ci failed even after re-resolving — restored the previous $LOCK_FILE"
+    fi
   fi
   deps_checksum > "$SOURCES/node_modules/.fe-lock-stamp"
 }
 
 build_frontend() {
   require_sources
+  # Applied here too so a standalone 'build' picks up overlay edits.
+  apply_overlay
   if ! deps_fresh; then
     install_deps
   fi
-  log "building frontend (gulp build + pack_github)"
+  log "building frontend (gulp lampa_go_build + pack_github)"
   (
     cd "$SOURCES"
-    # 'build' comes from our patches/010-gulp-build-task.patch: upstream has
-    # no non-interactive task that produces dest/app.js (the default watch
-    # task builds it but never exits), and pack_github needs it.
-    npx gulp build
+    # lampa_go_build comes from our patches/010-gulp-build-task.patch:
+    # upstream has no non-interactive task that produces dest/app.js (the
+    # default watch task builds it but never exits), and pack_github needs it.
+    npx gulp lampa_go_build
     npx gulp pack_github
   )
   [ -d "$SOURCES/build/github/lampa" ] || die "build produced no output at sources/build/github/lampa"
@@ -159,10 +175,15 @@ build_frontend() {
 deploy_frontend() {
   [ -d "$SOURCES/build/github/lampa" ] || die "no build output — run 'build' first"
   log "deploying to $DEPLOY_DIR"
+  mkdir -p "$(dirname "$DEPLOY_DIR.tmp")"
   rm -rf "$DEPLOY_DIR.tmp"
   cp -a "$SOURCES/build/github/lampa" "$DEPLOY_DIR.tmp"
-  rm -rf "$DEPLOY_DIR"
+  # Swap without a window in which $DEPLOY_DIR is missing or half-written.
+  if [ -d "$DEPLOY_DIR" ]; then
+    mv "$DEPLOY_DIR" "$DEPLOY_DIR.old"
+  fi
   mv "$DEPLOY_DIR.tmp" "$DEPLOY_DIR"
+  rm -rf "$DEPLOY_DIR.old"
 }
 
 cmd_diff() {
@@ -193,9 +214,13 @@ cmd_update() {
     return 0
   fi
 
+  if [ -n "$base" ] && [ "$base" != "$new" ]; then
+    warn_if_patches_conflict "$base" "$new"
+  fi
+
   # Reset the working tree to the new upstream commit.
-  # 'clean -fd' drops our overlay files (they are re-added below) but keeps
-  # ignored paths like node_modules/.
+  # 'clean -fd' drops our overlay files (build_frontend re-applies them) but
+  # keeps ignored paths like node_modules/.
   log "checking out ${new:0:12}"
   git -C "$SOURCES" checkout -q -f FETCH_HEAD
   git -C "$SOURCES" clean -qfd
@@ -205,8 +230,6 @@ cmd_update() {
   # node_modules is retained (standalone 'build' stays incremental).
   rm -rf "$SOURCES/build" "$SOURCES/dest"
 
-  TMP_ERR="$(mktemp)"
-  trap 'rm -f "$TMP_ERR"' EXIT
   apply_patches
   apply_overlay
   build_frontend
@@ -216,21 +239,27 @@ cmd_update() {
   if [ -n "$base" ]; then
     print_summary "$base" "$new" || true
   fi
+  if [ -n "$(git -C "$ROOT" status --porcelain -- frontend/package-lock.json)" ]; then
+    warn "frontend/package-lock.json was re-resolved — commit it"
+  fi
   log "update complete: ${base:-none} -> ${new:0:12}"
 }
 
 cmd_new_patch() {
   local name="${1:-}"
   [ -n "$name" ] || die "usage: update-frontend.sh new-patch <NNN-short-name>"
+  [[ "$name" =~ ^[0-9]{3}-[A-Za-z0-9._-]+$ ]] ||
+    die "patch name must match NNN-short-name"
   require_sources
 
-  # Intent-to-add makes untracked (new) files show up in 'git diff'; ignored
+  # Intent-to-add makes untracked (new) files show up in the diff; ignored
   # paths (build/, dest/, node_modules/) are not affected by -N.
   git -C "$SOURCES" add -N -A
 
-  # Diff new changes only: exclude build churn, everything already covered by
-  # existing patches (after an update they sit uncommitted in the tree), and
-  # overlay-delivered files (they are re-copied on every update anyway).
+  # Diff new changes only ('diff HEAD' also captures already-staged edits):
+  # exclude build churn, everything already covered by existing patches (after
+  # an update they sit uncommitted in the tree), and overlay-delivered files
+  # (they are re-copied on every update anyway).
   local excludes=()
   excludes+=(":(exclude)index/github/assembly.json")
   local f
@@ -241,13 +270,14 @@ cmd_new_patch() {
     [ -n "$f" ] && excludes+=(":(exclude)${f#./}")
   done < <(cd "$OVERLAY_DIR" && find . -type f)
 
-  if git -C "$SOURCES" diff --quiet -- "${excludes[@]}"; then
+  if git -C "$SOURCES" diff HEAD --quiet -- "${excludes[@]}"; then
     git -C "$SOURCES" reset -q
     die "no new changes beyond existing patches and overlay"
   fi
 
   mkdir -p "$PATCH_DIR"
-  git -C "$SOURCES" diff -- "${excludes[@]}" > "$PATCH_DIR/$name.patch"
+  git -C "$SOURCES" diff HEAD -- "${excludes[@]}" > "$PATCH_DIR/$name.patch"
+  git -C "$SOURCES" diff --stat HEAD -- "${excludes[@]}"
   # Only drop the intent-to-add markers; deliberately do NOT try to revert the
   # captured edits (a file can mix applied-patch hunks with new ones, so
   # surgical revert is error-prone). The tree is left dirty with patches plus
