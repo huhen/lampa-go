@@ -3,6 +3,7 @@ package cubproxy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -13,8 +14,19 @@ import (
 
 // Config configures the proxy.
 type Config struct {
-	Upstream         *url.URL
-	Timeout          time.Duration
+	// Upstream is the base URL that /cub/<suffix> requests are forwarded to.
+	Upstream *url.URL
+
+	// Timeout caps the WHOLE proxied exchange, including streaming the
+	// response body. If it expires before upstream headers arrive, the
+	// client gets a 502. A mid-stream expiry truncates the response —
+	// the client sees a closed connection — and never a 502. If image
+	// or CDN traffic later dominates here, per-phase Transport timeouts
+	// are the upgrade path.
+	Timeout time.Duration
+
+	// SubdomainMarkers lists first-segment markers that select an
+	// upstream subdomain, for example "tmdb".
 	SubdomainMarkers []string
 }
 
@@ -27,7 +39,12 @@ type Proxy struct {
 }
 
 // New builds the proxy. transport may be nil (http.DefaultTransport is used).
+// It panics on a nil upstream: that is a wiring error at startup, not a
+// runtime condition.
 func New(cfg Config, logger *slog.Logger, transport http.RoundTripper) *Proxy {
+	if cfg.Upstream == nil {
+		panic("cubproxy: nil upstream")
+	}
 	p := &Proxy{
 		upstream: cfg.Upstream,
 		markers:  make(map[string]struct{}, len(cfg.SubdomainMarkers)),
@@ -48,8 +65,17 @@ func New(cfg Config, logger *slog.Logger, transport http.RoundTripper) *Proxy {
 		// Stream the body as it arrives (no buffering).
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(err, context.Canceled) {
+				logger.DebugContext(r.Context(), "cub proxy request canceled by client",
+					slog.String("path", r.URL.Path),
+					slog.String("upstream", r.URL.Host),
+					slog.Any("error", err))
+				return
+			}
 			logger.ErrorContext(r.Context(), "cub proxy request failed",
-				slog.String("path", r.URL.Path), slog.Any("error", err))
+				slog.String("path", r.URL.Path),
+				slog.String("upstream", r.URL.Host),
+				slog.Any("error", err))
 			http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		},
 	}
@@ -84,7 +110,10 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 	pr.Out.URL.Host = host
 	pr.Out.URL.Path = "/" + suffix
 	pr.Out.URL.RawPath = ""
-	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+	// RawQuery is carried over from pr.Out as prepared by ReverseProxy,
+	// which already dropped unparsable material (bare semicolons, invalid
+	// escapes). Do not copy pr.In.URL.RawQuery here — that would undo the
+	// sanitization.
 	pr.Out.Host = host
 }
 

@@ -70,6 +70,7 @@ func TestPathPreservingProxy(t *testing.T) {
 	p := newProxy(t, upstream, time.Second)
 
 	req := httptest.NewRequest(http.MethodGet, "http://local/cub/api/users/get?email=abc", nil)
+	req.Header.Set("X-Forwarded-For", "6.6.6.6")
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
@@ -82,8 +83,84 @@ func TestPathPreservingProxy(t *testing.T) {
 	if gotXFF == "" {
 		t.Error("X-Forwarded-For must be set")
 	}
+	if strings.Contains(gotXFF, "6.6.6.6") {
+		t.Errorf("client-supplied X-Forwarded-For must be stripped, upstream saw %q", gotXFF)
+	}
 	if rec.Body.String() != "upstream:/api/users/get?email=abc" {
 		t.Errorf("body = %q", rec.Body.String())
+	}
+}
+
+func TestSubdomainMarkerCaseInsensitive(t *testing.T) {
+	var gotHost string
+	_, upstream := newUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		_, _ = io.WriteString(w, "ok")
+	})
+	p := newProxy(t, upstream, time.Second)
+
+	req := httptest.NewRequest(http.MethodGet, "http://local/cub/TMDB/3/x", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if !strings.HasPrefix(gotHost, "tmdb.") {
+		t.Errorf("upstream host = %q, want lowercase prefix tmdb.", gotHost)
+	}
+}
+
+func TestQuerySanitized(t *testing.T) {
+	// ReverseProxy sanitizes the outbound query (bare semicolons and
+	// invalid escapes make it re-encode via url.ParseQuery, which drops
+	// unparsable pairs). The proxy must not undo that.
+	tests := []struct {
+		name        string
+		target      string
+		notContains string // must not appear in the upstream-seen query
+		contains    string // must appear in the upstream-seen query; "" means the query is dropped entirely
+	}{
+		{"invalid escape", "http://local/cub/api/x?a=1&bad=%zz", "%zz", "a=1"},
+		{"bare semicolon", "http://local/cub/api/x?a=1;b=2", ";", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotQuery string
+			_, upstream := newUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.RawQuery
+				_, _ = io.WriteString(w, "ok")
+			})
+			p := newProxy(t, upstream, time.Second)
+
+			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, req)
+
+			if strings.Contains(gotQuery, tt.notContains) {
+				t.Errorf("upstream query = %q, want %q removed", gotQuery, tt.notContains)
+			}
+			if tt.contains != "" && !strings.Contains(gotQuery, tt.contains) {
+				t.Errorf("upstream query = %q, want %q preserved", gotQuery, tt.contains)
+			}
+		})
+	}
+}
+
+func TestEmptySuffix(t *testing.T) {
+	var gotPath, gotQuery string
+	_, upstream := newUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		_, _ = io.WriteString(w, "ok")
+	})
+	p := newProxy(t, upstream, time.Second)
+
+	req := httptest.NewRequest(http.MethodGet, "http://local/cub/?q=1", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if gotPath != "/" {
+		t.Errorf("upstream path = %q, want /", gotPath)
+	}
+	if gotQuery != "q=1" {
+		t.Errorf("upstream query = %q, want q=1", gotQuery)
 	}
 }
 
