@@ -229,14 +229,15 @@ func (d *Deployer) Prune() error {
 		}
 	}
 
-	// Sweep .swap- leftovers in Root too: Swap creates its temp symlink
-	// there, and a crash between symlink and rename leaves it behind.
+	// Sweep leftovers in Root too: Swap creates its temp symlink there and
+	// the worker downloads archives there; a crash mid-step leaves them
+	// behind.
 	rootEntries, err := os.ReadDir(d.Root)
 	if err != nil {
 		return fmt.Errorf("read root dir: %w", err)
 	}
 	for _, e := range rootEntries {
-		if strings.HasPrefix(e.Name(), ".swap-") {
+		if strings.HasPrefix(e.Name(), ".swap-") || strings.HasPrefix(e.Name(), ".archive-") {
 			if err := os.RemoveAll(filepath.Join(d.Root, e.Name())); err != nil {
 				return fmt.Errorf("prune %s: %w", e.Name(), err)
 			}
