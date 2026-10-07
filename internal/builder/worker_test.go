@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -220,6 +221,69 @@ func TestReconcileRejectsBadBuildID(t *testing.T) {
 	got, gerr := meta.Get(context.Background(), deployedCommitKey)
 	if gerr != nil || got != "" {
 		t.Errorf("deployed_commit = (%q, %v), want empty", got, gerr)
+	}
+}
+
+func TestReconcileNoAvailableCommit(t *testing.T) {
+	f := &fakeBuilder{available: "", buildStatus: BuildSuccess, t: t}
+	w, d, meta := newTestWorker(t, f)
+
+	if err := w.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, err := os.Lstat(d.StaticDir); err == nil {
+		t.Error("nothing must be deployed when available_commit is empty")
+	}
+	if got, _ := meta.Get(context.Background(), deployedCommitKey); got != "" {
+		t.Errorf("deployed_commit = %q, want empty", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.starts != 0 {
+		t.Errorf("starts = %d, want 0", f.starts)
+	}
+}
+
+func TestReconcileFailedBuildLeavesState(t *testing.T) {
+	f := &fakeBuilder{available: "aaa", buildStatus: BuildFailed, t: t}
+	w, d, meta := newTestWorker(t, f)
+
+	err := w.Reconcile(context.Background())
+	if err == nil {
+		t.Fatal("expected error for failed build")
+	}
+	if _, lstatErr := os.Lstat(d.StaticDir); lstatErr == nil {
+		t.Error("nothing must be deployed on build failure")
+	}
+	if got, _ := meta.Get(context.Background(), deployedCommitKey); got != "" {
+		t.Errorf("deployed_commit = %q, want empty", got)
+	}
+}
+
+func TestReconcileBusyRetriesNextTick(t *testing.T) {
+	f := &fakeBuilder{available: "aaa", buildStatus: BuildSuccess, buildErrCode: http.StatusConflict, t: t}
+	w, d, meta := newTestWorker(t, f)
+
+	err := w.Reconcile(context.Background())
+	if !errors.Is(err, ErrBusy) {
+		t.Fatalf("err = %v, want ErrBusy", err)
+	}
+	if _, lstatErr := os.Lstat(d.StaticDir); lstatErr == nil {
+		t.Error("nothing must be deployed when builder is busy")
+	}
+	if got, _ := meta.Get(context.Background(), deployedCommitKey); got != "" {
+		t.Errorf("deployed_commit = %q, want empty", got)
+	}
+	// Builder frees up; the next tick succeeds.
+	f.mu.Lock()
+	f.buildErrCode = 0
+	f.mu.Unlock()
+	if err := w.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile after busy: %v", err)
+	}
+	got, _ := meta.Get(context.Background(), deployedCommitKey)
+	if got != "aaa" {
+		t.Errorf("deployed_commit = %q, want aaa", got)
 	}
 }
 
