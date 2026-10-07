@@ -8,3 +8,4 @@ frontend/package-lock.json.bak
 *.db-shm
 .idea/
 /config.yaml
+/.env
