@@ -106,7 +106,7 @@ check "proxy-marker" "upstream:/3/movie/1" "$BASE/cub/tmdb/3/movie/1"
 check "static-index" "lampa-smoke" "$BASE/"
 check "geo-default" "US" "$BASE/cub/geo"
 
-HDRS="$(curl -sS -D - -o /dev/null "$BASE/cub/api/anything")"
+HDRS="$(curl -sS -D - -o /dev/null "$BASE/cub/api/anything")" || fail "proxy headers: request failed"
 # No -f above: the status line must be parsed here, so assert 200 explicitly
 # (otherwise a proxy error page could pass the leak check vacuously).
 case "$HDRS" in
