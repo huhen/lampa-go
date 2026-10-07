@@ -62,20 +62,39 @@ func (w *statusWriter) Flush() {
 // Unwrap exposes the wrapped writer to http.ResponseController.
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// requestID assigns an X-Request-ID to every request and response.
+// requestID assigns an X-Request-ID to every request and response. A
+// client-supplied ID is honored only when it passes validRequestID; otherwise
+// a fresh one is generated. No header is set when no ID could be produced.
 func requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
-		if id == "" {
+		if !validRequestID(id) {
+			id = ""
 			var buf [8]byte
 			if _, err := rand.Read(buf[:]); err == nil {
 				id = hex.EncodeToString(buf[:])
 			}
 		}
-		w.Header().Set("X-Request-ID", id)
+		if id != "" {
+			w.Header().Set("X-Request-ID", id)
+		}
 		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// validRequestID accepts only short printable-ASCII IDs so a hostile header
+// cannot smuggle control characters or unbounded data into logs and responses.
+func validRequestID(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // recoverMiddleware converts handler panics into 500 responses.

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -9,12 +10,53 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"lampa-go/internal/config"
 	"lampa-go/internal/storage"
 )
+
+// logBuffer is a mutex-guarded bytes.Buffer: the server writes request logs
+// from its connection goroutines while tests read them concurrently.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func (l *logBuffer) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf.Reset()
+}
+
+// waitLog polls the buffer for want: a proxied response can reach the client
+// while the server goroutine has not yet written its request-log line.
+func waitLog(t *testing.T, logs *logBuffer, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(logs.String(), want) {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("log line lacking %q not found within deadline, got: %s", want, logs.String())
+}
 
 // newUpstream starts a fake upstream answering "upstream:<path>?<query>".
 func newUpstream(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *url.URL) {
@@ -49,7 +91,16 @@ func testConfig(t *testing.T, upstream string) config.Config {
 
 func newTestServer(t *testing.T, cfg config.Config) *httptest.Server {
 	t.Helper()
-	logger := slog.New(slog.DiscardHandler)
+	ts, _ := newTestServerWithLogs(t, cfg)
+	return ts
+}
+
+// newTestServerWithLogs builds the test server and returns the buffer that
+// captures its request logs.
+func newTestServerWithLogs(t *testing.T, cfg config.Config) (*httptest.Server, *logBuffer) {
+	t.Helper()
+	logs := &logBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
 
 	db, err := storage.Open(cfg.DB)
 	if err != nil {
@@ -71,7 +122,7 @@ func newTestServer(t *testing.T, cfg config.Config) *httptest.Server {
 
 	ts := httptest.NewServer(srv.Handler)
 	t.Cleanup(ts.Close)
-	return ts
+	return ts, logs
 }
 
 func get(t *testing.T, url string) (*http.Response, string) {
@@ -162,4 +213,32 @@ func TestNewRejectsBadUpstream(t *testing.T) {
 	if _, err := New(Deps{Config: cfg, Logger: slog.New(slog.DiscardHandler)}); err == nil {
 		t.Fatal("expected error for broken upstream url")
 	}
+}
+
+// TestObserveLogs pins that observe reads the matched route from the request
+// ServeMux stamped (the downstream copy), not from its own request: the
+// explicit stub reports its pattern, the /cub fallback reports "/cub/{rest...}".
+func TestObserveLogs(t *testing.T) {
+	_, upstreamURL := newUpstream(t, nil)
+	cfg := testConfig(t, upstreamURL.String())
+	ts, logs := newTestServerWithLogs(t, cfg)
+
+	t.Run("matched route and status", func(t *testing.T) {
+		logs.Reset()
+		resp, _ := get(t, ts.URL+"/healthz")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("healthz: %d", resp.StatusCode)
+		}
+		waitLog(t, logs, `route="GET /healthz"`)
+		waitLog(t, logs, "status=200")
+	})
+
+	t.Run("fallback route for the proxy", func(t *testing.T) {
+		logs.Reset()
+		resp, _ := get(t, ts.URL+"/cub/api/users/get")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("proxy: %d", resp.StatusCode)
+		}
+		waitLog(t, logs, "route=/cub/{rest...}")
+	})
 }
