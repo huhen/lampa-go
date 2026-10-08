@@ -84,7 +84,7 @@ clean:
 
 В `docs/superpowers/specs/2026-10-07-lampa-go-design.md` заменить:
 - строку таблицы §5.2: «`/cub/tmdb./...`, `/cub/geo./...` | прокси | маркер поддомена в первом сегменте → ...» на «`/cub/tmdb/...`, `/cub/geo/...` | прокси | маркер поддомена (первый сегмент пути) → `tmdb.<upstream-host>/...` (приём CubProxy `GetDomain`; работает на одном домене, без wildcard DNS)»;
-- в §5.3: «первый сегмент пути из множества `{tmdb., geo., ws., imagetmdb., cdn., ad.}` → поддомен приписывается к хосту upstream (`/cub/tmdb./3/x` → `https://tmdb.cub.best/3/x`)» на «первый сегмент пути из множества `{tmdb, geo, ws, imagetmdb, cdn, ad}` → поддомен приписывается к хосту upstream (`/cub/tmdb/3/x` → `https://tmdb.cub.best/3/x`)»;
+- в §5.3: «первый сегмент пути из множества `{tmdb., geo., ws., imagetmdb., cdn., ad.}` → поддомен приписывается к хосту upstream (`/cub/tmdb./3/x` → `https://tmdb.cub.example/3/x`)» на «первый сегмент пути из множества `{tmdb, geo, ws, imagetmdb, cdn, ad}` → поддомен приписывается к хосту upstream (`/cub/tmdb/3/x` → `https://tmdb.cub.example/3/x`)»;
 - в §7: `subdomain_markers: ["tmdb.", "geo.", "ws.", "imagetmdb.", "cdn.", "ad."]` → `subdomain_markers: ["tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"]`.
 
 - [ ] **Step 6: Verify build**
@@ -318,7 +318,7 @@ func Defaults() Config {
 	return Config{
 		Server: Server{Listen: ":8080", StaticDir: "./deploy/web"},
 		Cub: Cub{
-			Upstream:         "https://cub.best",
+			Upstream:         "https://cub.example",
 			Timeout:          Duration(15 * time.Second),
 			GeoHeader:        "X-Geo-Country",
 			GeoDefault:       "US",
@@ -2462,9 +2462,9 @@ git commit -m "feat: main binary with graceful shutdown and smoke test"
 ### Task 10: Frontend overlay and example config
 
 **Files:**
-- Create: `frontend/overlay/plugins/modification.js`, `config.example.yaml`
+- Create: `frontend/overlay/public/plugins/modification.js`, `config.example.yaml`
 
-- [ ] **Step 1: Write `frontend/overlay/plugins/modification.js`**
+- [ ] **Step 1: Write `frontend/overlay/public/plugins/modification.js`**
 
 ```js
 // modification.js — lampa-go runtime integration.
@@ -2474,7 +2474,7 @@ git commit -m "feat: main binary with graceful shutdown and smoke test"
 (function () {
 	'use strict';
 
-	var MIRRORS = ['cub.best', 'cub.black', 'durex.monster', 'cubnotrip.top'];
+	var MIRRORS = ['cub.example', 'cub2.example', 'mirror1.example', 'mirror2.example'];
 	var MARKERS = ['tmdb', 'geo', 'ws', 'imagetmdb', 'cdn', 'ad'];
 
 	function ownHost(host) {
@@ -2527,7 +2527,7 @@ server:
   base_domain: lampa.example.com  # our public domain (used by frontend patches)
 
 cub:
-  upstream: https://cub.best # upstream the /cub/* requests are forwarded to
+  upstream: https://cub.example # upstream the /cub/* requests are forwarded to
   timeout: 15s
   geo_header: X-Geo-Country  # client country header set by the reverse proxy
   geo_default: US            # fallback when the header is missing

@@ -1,0 +1,10 @@
+/bin/
+/data/
+/deploy/
+/frontend/sources/
+frontend/package-lock.json.bak
+*.db
+*.db-wal
+*.db-shm
+.idea/
+/config.yaml
