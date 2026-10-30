@@ -14,8 +14,7 @@ RUN mkdir -p /out/rootfs/var/lib/lampa-go/web && chown -R 65532:65532 /out/rootf
 
 # Stage 2: minimal static runtime.
 FROM gcr.io/distroless/static:nonroot
-# WORKDIR / gives a predictable, readable cwd: the distroless default
-# /home/nonroot is mode 0700, so relative paths in a mounted config fail there.
+# Predictable, world-readable cwd for relative paths in a mounted config.
 WORKDIR /
 COPY --from=build /out/lampa-go /lampa-go
 COPY --from=build /out/rootfs/ /
