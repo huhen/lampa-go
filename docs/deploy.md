@@ -86,15 +86,10 @@ WantedBy=multi-user.target
 
 ## Обновление
 
-Фронтенд:
+Фронтенд обновляется автоматически воркером из lampa-web-builder (см. ниже) —
+ручных шагов обновления фронта нет.
 
-```bash
-make fe-update      # новый upstream-коммит -> патчи -> сборка -> deploy/web
-```
-
-Рестарт lampa-go **не требуется**: статика читается с диска на каждый запрос, а деплой подменяет каталог rename'ами (сначала готовый `<deploy>.tmp`, затем текущий → `<deploy>.old`, `tmp` → deploy, `old` удаляется). Каталог не бывает недописанным (rename атомарен); между двумя rename существует микроскопический интервал без каталога — in-flight запрос может получить 404; при сбое второго `mv` каталог восстанавливается из `.old` вручную. `index.html` и `assembly.json` отдаются с `Cache-Control: no-cache`, остальная статика — на сутки.
-
-Go-код:
+Go-код (бинарник на хосте):
 
 ```bash
 make build
@@ -102,6 +97,13 @@ systemctl restart lampa-go
 ```
 
 `systemctl restart` шлёт `SIGTERM` — срабатывает штатный graceful shutdown (см. unit выше).
+
+Go-код (compose):
+
+```bash
+docker compose pull
+docker compose up -d
+```
 
 ## Обновление фронта через билдер
 
@@ -123,34 +125,23 @@ systemctl restart lampa-go
 
 ### compose
 
-`docker-compose.yml` в корне репозитория поднимает билдер; ключи — в `.env`
-(шаблон `.env.example`). Пока lampa-go работает бинарником на хосте, раскомментируйте
-loopback-публикацию порта и укажите `builder.url: http://127.0.0.1:8081`; после
-контейнеризации lampa-go — `builder.url: http://builder:8080` (общая сеть compose,
-порты наружу не публикуются).
+`docker-compose.yml` в корне репозитория поднимает полный стек: `builder`
+(порт наружу не публикуется, доступен по имени сервиса `builder`) и `lampa-go`
+(`127.0.0.1:8080` за reverse-proxy). Ключи — в `.env` (шаблон `.env.example`):
+`BUILDER_API_KEY` должен совпадать с `builder.api_key` в `config.yaml`,
+`BUILDER_DEFAULT_DOMAIN` — с `server.base_domain`. Конфиг монтируется
+read-only, данные (БД + версии фронта) живут в volume `lampa-data`.
 
-### Миграция с плоской раскладки
+Контейнерный `config.yaml` (пути — внутри контейнера):
 
-Старая раскладка (файлы прямо в `static_dir`) с билдером не работает — `static_dir` должен
-указывать на symlink. Переезд:
-
-1. Остановить lampa-go.
-2. Перенести текущую статику в версионный каталог (`<commit>` — версия текущей сборки,
-   например `b4a13b6…`; если неизвестна — любой маркер, первый цикл воркера всё равно
-   задеплоит свежую версию):
-
-   ```bash
-   cd deploy/web
-   mkdir -p versions/<commit>
-   # всё верхнего уровня, кроме versions/, уезжает в версионный каталог
-   find . -mindepth 1 -maxdepth 1 ! -name versions -exec mv {} versions/<commit>/ \;
-   ln -s versions/<commit> .current-tmp && mv -T .current-tmp current
-   ```
-
-3. В конфиге: `server.static_dir: ./deploy/web/current`, секция `builder`.
-4. Запустить lampa-go. Пустой `deployed_commit` означает «обновиться до доступного»:
-   первый цикл воркера сам задеплоит актуальную версию из билдера — ручной сеанс коммита
-   в БД не нужен.
-
-Проще альтернатива, если старая статика не дорога: удалить `deploy/web` целиком, указать
-`static_dir: ./deploy/web/current` и запустить lampa-go — воркер развернёт фронт с нуля.
+```yaml
+server:
+  listen: ":8080"
+  static_dir: /var/lib/lampa-go/web/current
+  base_domain: lampa.example.com
+builder:
+  url: http://builder:8080
+  api_key: <тот же BUILDER_API_KEY>
+db:
+  dsn: /var/lib/lampa-go/lampa-go.db
+```
