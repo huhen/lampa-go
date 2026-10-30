@@ -62,15 +62,15 @@ requestID → observe (trace + metrics + request log) → recover → mux
 
 ## Попадание фронтенда под /cub/
 
-Фронт из коробки ходит на зеркала куба, перечисленные в `cub_mirrors` в `src/core/manifest.js` upstream (и их поддомены). Чтобы трафик попал на наш домен, в overlay лежит `public/plugins/modification.js`:
+Фронт из коробки ходит на зеркала куба, перечисленные в `cub_mirrors` в `src/core/manifest.js` upstream (и их поддомены). Чтобы трафик попал на наш домен, в репозитории [lampa-web-builder](https://github.com/huhen/lampa-web-builder) два механизма. Первый — плагин `overlay/public/plugins/modification.js` (фронтенд грузит его сам с хостинга):
 
 - Lampa автоматически загружает `plugins/modification.js` с хостинга (см. `src/core/plugins.js` upstream) — патчить загрузчик не нужно;
 - плагин подписан на `Lampa.Listener.follow('request_before')` и переписывает URL к зеркалам куба **и к собственному домену** в `<origin>/cub/<marker?>/<path>` (маркер — тот же список: `tmdb`, `geo`, `ws`, `imagetmdb`, `cdn`, `ad`; учитываются и поддомены зеркал вида `tmdb.<зеркало>`);
 - расчёт `origin` устойчив к старым webview (Orsay, ранний webOS), где нет `location.origin`.
 
-Ожидаемый будущий патч `src/core/manifest.js` (`cub_mirrors = ['<наш домен>']`) сделает наш домен «родным» зеркалом: тогда URL будет строиться сразу на наш домен без runtime-переписывания. Патч **пока не создан** — боевой домен не выбран; как его создать, описано в [frontend-update.md](frontend-update.md).
+Второй — патч `020-cub-domains.patch` в репозитории билдера: он прописывает `cub_mirrors = ['{{CUB_DOMAIN}}']` в `src/core/manifest.js`, а плейсхолдер подставляется **на этапе сборки** значением `server.base_domain` из заказа сборки. Наш домен становится «родным» зеркалом: URL строится сразу на наш домен, `modification.js` остаётся runtime-страховкой для ссылок на сторонние зеркала.
 
-> **Синхронизация списков.** Списки маркеров и зеркал продублированы в двух местах: `cub.subdomain_markers` в конфиге (их использует прокси) и `MARKERS`/`MIRRORS` в `frontend/overlay/public/plugins/modification.js` (их использует клиент). При смене зеркал upstream обновлять **оба** места; правка `modification.js` требует `make fe-update`, чтобы попасть в сборку.
+> **Синхронизация списков.** Списки маркеров и зеркал продублированы в двух местах: `cub.subdomain_markers` в конфиге (их использует прокси) и `MARKERS`/`MIRRORS` в `overlay/public/plugins/modification.js` репозитория [lampa-web-builder](https://github.com/huhen/lampa-web-builder) (их использует клиент). При смене зеркал upstream обновлять **оба** места; правка `modification.js` делается в репозитории билдера — следующая сборка подхватит её автоматически.
 
 ## Хранилище
 

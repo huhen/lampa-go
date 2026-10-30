@@ -11,8 +11,8 @@
 | Ключ | Тип | Default | Описание |
 |---|---|---|---|
 | `server.listen` | string | `:8080` | адрес прослушивания; за reverse-proxy обычно `127.0.0.1:8080` |
-| `server.static_dir` | string | `./deploy/web` | каталог с собранным фронтом (результат `make fe-update`); создаётся при старте, если нет |
-| `server.base_domain` | string | *(пусто)* | наш публичный домен; в первой итерации ни на что не влияет — зарезервирован под будущий frontend-патч |
+| `server.static_dir` | string | `./deploy/web/current` | путь **symlink'а** на текущую версию фронта; версии раскладывает builder-воркер (`<корень static_dir>/versions/<commit>/`); при `builder.enabled: false` — обычный каталог со статикой, создаётся при старте |
+| `server.base_domain` | string | *(пусто)* | наш публичный домен; обязателен при `builder.enabled: true` — домен заказываемой сборки |
 
 ### cub
 
@@ -32,14 +32,15 @@
 
 | Ключ | По умолчанию | Значение |
 |---|---|---|
-| `enabled` | `false` | включить воркер обновления фронта |
+| `enabled` | `true` | включить воркер обновления фронта из билдера; отключать только для локальных прогонов без билдера (smoke, отладка) |
 | `url` | `http://builder:8080` | адрес API билдера; в compose — имя сервиса |
 | `api_key` | — | ключ `X-API-Key`; обязателен при `enabled: true` |
 | `poll_interval` | `5m` | как часто сверяться с билдером |
 | `keep_versions` | `3` | сколько версий хранить в `<корень static_dir>/versions/` |
 
-При `enabled: true` обязательны `server.base_domain` — им становится домен заказываемой
-сборки. `server.static_dir` должен указывать на путь **symlink'а** (например,
+Включён по умолчанию; при `enabled: true` обязательны `builder.api_key` и
+`server.base_domain` — им становится домен заказываемой сборки.
+`server.static_dir` должен указывать на путь **symlink'а** (например,
 `./deploy/web/current`): билдер-воркер кладёт версии в `<корень>/versions/<commit>/` и
 атомарно переименовывает symlink; если `static_dir` — обычный каталог, старт падает с
 подсказкой (см. deploy.md про миграцию).
