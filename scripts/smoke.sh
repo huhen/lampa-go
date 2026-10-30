@@ -67,6 +67,8 @@ server:
   listen: "127.0.0.1:${PORT}"
   static_dir: ${TMP}/web
   base_domain: localhost
+builder:
+  enabled: false
 cub:
   # "localhost" (not 127.0.0.1): a subdomain marker rewrites the upstream host
   # to e.g. "tmdb.<host>", and "tmdb.localhost" resolves to loopback while
