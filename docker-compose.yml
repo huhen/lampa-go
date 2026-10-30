@@ -1,7 +1,8 @@
-# Полный стек: билдер фронта + lampa-go
-# (спек: docs/superpowers/specs/2026-10-30-builder-only-frontend-design.md).
-# Ключи — в .env (шаблон .env.example); конфиг lampa-go — ./config.yaml
-# (шаблон config.example.yaml; контейнерные пути — docs/deploy.md, раздел compose).
+# Full stack: frontend builder + lampa-go
+# (spec: docs/superpowers/specs/2026-10-30-builder-only-frontend-design.md).
+# Keys live in .env (template: .env.example); lampa-go config is ./config.yaml
+# (template: config.example.yaml; container paths — docs/deploy.md, compose section).
+# Before the first `docker compose up`: cp .env.example .env && cp config.example.yaml config.yaml
 services:
   builder:
     image: ghcr.io/huhen/lampa-web-builder:latest
@@ -13,15 +14,17 @@ services:
       API_KEY: ${BUILDER_API_KEY:?set BUILDER_API_KEY in .env}
       DEFAULT_DOMAIN: ${BUILDER_DEFAULT_DOMAIN:?set BUILDER_DEFAULT_DOMAIN in .env}
       POLL_INTERVAL: "6h"
-    # Порт наружу не публикуется: builder доступен только внутри сети compose
-    # по имени сервиса.
+    # No published port: builder is reachable only inside the compose
+    # network by the service name.
   lampa-go:
-    image: ghcr.io/huhen/lampa-go:latest
+    # Pinned to :main: `latest` is only published from `v*` release tags (none
+    # cut yet); `main` is published on every merge to main.
+    image: ghcr.io/huhen/lampa-go:main
     restart: unless-stopped
     depends_on:
       - builder
     ports:
-      - "127.0.0.1:8080:8080"   # за reverse proxy
+      - "127.0.0.1:8080:8080"   # behind a reverse proxy
     volumes:
       - ./config.yaml:/etc/lampa-go/config.yaml:ro
       - lampa-data:/var/lib/lampa-go
