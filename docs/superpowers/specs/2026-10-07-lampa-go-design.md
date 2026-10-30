@@ -12,7 +12,7 @@
 
 1. Сервинг веб-интерфейса Lampa (сборка из lampa-source).
 2. Скелет API cub: каркас «свой ответ / прокси» + заглушки спец-ручек.
-3. Скрипт обновления исходников фронта: сводка изменений → патчи → сборка → деплой.
+3. Получение собранного фронта: автоматически из [lampa-web-builder](https://github.com/huhen/lampa-web-builder) через API (см. спек `2026-10-30-builder-only-frontend-design.md`).
 
 **Не входит (будущие итерации):** собственная бизнес-логика аккаунта (bookmarks/timeline/storage), WebSocket-сокет, собственный tmdb-сервис как отдельный модуль, транскодинг, TorrServer, DLNA, WAF/лимиты, админка.
 
@@ -27,7 +27,7 @@
 | Postgres | connection pool: pgx/v5 stdlib-режим поверх `database/sql` с настройками пула |
 | Схема API | сервис-первым: `/cub/{...}`, `/tmdb/{...}`, ... — не `/api/{сервис}/*` |
 | Wildcard DNS | не используется; маршрутизация strictly path-based на одном домене; при конфликте путей или потребности разделения (например транскодинг) сервис выделяется в отдельный микросервис со своим поддоменом |
-| Обновление фронта | вручную скриптом (локально/CI); сервер только раздаёт готовую папку |
+| Обновление фронта | автоматически воркером из lampa-web-builder (API); сервер раздаёт распакованные версии |
 | Документация | русский язык, технические термины — на английском; код и комментарии — только английский |
 | Развёртывание | за reverse-proxy (nginx/Caddy), сервер слушает HTTP на локальном порту |
 
@@ -49,6 +49,7 @@
 lampa-go/
 ├── cmd/lampa-go/            # main: сборка зависимостей, запуск, graceful shutdown
 ├── internal/
+│   ├── builder/             # интеграция с lampa-web-builder: клиент, деплойер, воркер
 │   ├── config/              # YAML-конфиг, дефолты, валидация
 │   ├── server/              # сборка HTTP-сервера, middleware chain
 │   ├── web/                 # раздача статики фронта (fs, index.html, cache headers)
@@ -56,15 +57,8 @@ lampa-go/
 │   ├── cubproxy/            # прокси: ReverseProxy, header filtering, subdomain-маркеры
 │   ├── obs/                 # OpenTelemetry setup (traces/metrics/logs, noop по умолчанию)
 │   └── storage/             # database/sql (sqlite|postgres), goose-миграции (embedded)
-├── frontend/
-│   ├── patches/             # наши патчи: unified diff, применяются git apply
-│   ├── overlay/             # файлы поверх исходников без diff-механики (plugins/modification.js)
-│   ├── sources/             # рабочая копия lampa-source — в .gitignore
-│   └── ORIGIN_COMMIT        # upstream-коммит последнего применённого обновления
-├── scripts/
-│   └── update-frontend.sh   # пайплайн обновления фронта
 ├── migrations/              # goose .sql, подключаются через //go:embed
-├── deploy/web/              # каталог деплоя фронта — в .gitignore
+├── deploy/web/              # версии фронта: versions/<commit>/ + current (symlink) — в .gitignore
 ├── docs/                    # документация (русский)
 ├── config.example.yaml
 └── Makefile
@@ -114,29 +108,18 @@ RequestID → OTel trace context → slog-логирование (с `trace_id`)
 
 ### 5.5 Попадание фронтенда под `/cub/`
 
-Два механизма (создаются скриптом обновления, см. §7):
+Два механизма (реализованы в репозитории [lampa-web-builder](https://github.com/huhen/lampa-web-builder), см. §6):
 
-1. **Патч `src/core/manifest.js`** — `cub_mirrors = ['{server.base_domain}']`: mirrors-checker фронтенда пингует наш `/cub/api/checker`, домен не «уплывает».
-2. **`plugins/modification.js`** (overlay, фронтенд грузит его сам с хостинга) — перехват `Lampa.Listener.follow('request_before')` и переписывание URL зеркал куба → `{protocol}//{host}/cub/<path+query>` (scheme и host срезаются; `tmdb.`-поддомен сохраняется первым сегментом маркера).
+1. **Патч `src/core/manifest.js`** (`020-cub-domains.patch` в билдере) — `cub_mirrors = ['{{CUB_DOMAIN}}']`, плейсхолдер подставляется доменом `{server.base_domain}` при заказе сборки: mirrors-checker фронтенда пингует наш `/cub/api/checker`, домен не «уплывает».
+2. **`plugins/modification.js`** (overlay билдера, фронтенд грузит его сам с хостинга) — перехват `Lampa.Listener.follow('request_before')` и переписывание URL зеркал куба → `{protocol}//{host}/cub/<path+query>` (scheme и host срезаются; `tmdb.`-поддомен сохраняется первым сегментом маркера).
 
 WebSocket Lampa (`wss://<soc_mirrors>:8443`) в v1 не трогается — фронтенд ходит на soc-зеркала куба напрямую.
 
-## 6. Скрипт обновления фронта
+## 6. Получение фронта (lampa-web-builder)
 
-`scripts/update-frontend.sh`, цели Makefile: `fe-update` (полный пайплайн), `fe-diff` (только сводка, dry-run), `fe-build` (сборка текущего sources), `fe-deploy` (деплой собранного), `fe-new-patch NAME=NNN-slug` (создание нового патча).
+Веб-интерфейс собирается вне lampa-go: сервис [lampa-web-builder](https://github.com/huhen/lampa-web-builder) качает upstream, применяет патчи и overlay (они живут там же), подставляет домен и отдаёт сборку tar.gz по API.
 
-Пайплайн `fe-update`:
-
-1. **Fetch** — `frontend/sources/` хранит pristine git-clone `yumata/lampa-source`; `git fetch` нового `upstream/main`.
-2. **Сводка изменений** — `git diff --stat {ORIGIN_COMMIT}..FETCH_HEAD` + список изменённых файлов + перекрёстная проверка: если upstream изменил файл, затрагиваемый каким-либо патчем, — предупреждение «патч NNN вероятно конфликтует».
-3. **Патчи** — checkout нового коммита; каждый `frontend/patches/NNN-*.patch` в лексическом порядке: `git apply --check`, затем `git apply`. Первый неприменившийся — стоп с отчётом (патч, hunks), `ORIGIN_COMMIT` не обновляется.
-4. **Overlay** — рекурсивное копирование `frontend/overlay/` поверх sources.
-5. **Сборка** — `npm ci` (если изменился lock-файл) → `npx gulp pack_github` → `build/github/lampa/`.
-6. **Деплой** — атомарно: результат в tmp-каталог рядом с `deploy/web/` → rename. Запись нового `ORIGIN_COMMIT`. Итоговая сводка: версия, статистика, применённые патчи.
-
-В git живут только `patches/`, `overlay/`, `ORIGIN_COMMIT`; `sources/` и `deploy/web/` — в `.gitignore`.
-
-Патчи — единый механизм точечных доработок (списки доменов и т.п.); overlay — для добавляемых целиком файлов (`modification.js`, статические ассеты).
+Воркер lampa-go (`internal/builder`) периодически сверяет `available_commit` билдера со своим `deployed_commit` (таблица `app_meta`): при отличии заказывает сборку `{server.base_domain}`, ждёт готовности, скачивает архив и раскладывает его в `<корень static_dir>/versions/<commit>/`, атомарно переключая symlink `current`. На диске хранится `builder.keep_versions` последних версий.
 
 ## 7. Конфигурация
 
@@ -145,7 +128,7 @@ WebSocket Lampa (`wss://<soc_mirrors>:8443`) в v1 не трогается — �
 ```yaml
 server:
   listen: ":8080"
-  static_dir: ./deploy/web
+  static_dir: ./deploy/web/current
   base_domain: lampa.example.com   # наш домен (подставляется в патчи/rewrite)
 cub:
   upstream: <built-in default — see internal/config>
@@ -153,6 +136,9 @@ cub:
   geo_header: X-Geo-Country
   geo_default: US
   subdomain_markers: ["tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"]
+builder:
+  url: http://builder:8080           # lampa-web-builder API
+  api_key: <ключ>                    # обязателен при builder.enabled (по умолчанию true)
 db:
   driver: sqlite                    # sqlite | postgres
   dsn: ./data/lampa-go.db
@@ -191,7 +177,7 @@ log:
 - Хендлеры и роутер — `httptest`; прокси — `httptest.Server` как fake upstream: path-preserving, фильтрация заголовков, subdomain-маркеры, приоритет заглушек над прокси, таймаут.
 - Конфиг — golden-тесты дефолтов и валидации.
 - `make smoke` — запуск бинарника на тестовом порту с tmp-статикой + curl по ключевым ручкам (healthz, readyz, checker, blacklist, metric, статика, прокси на fake upstream).
-- Скрипт обновления — `fe-diff` (dry-run) + ручная проверка первого реального обновления.
+- Воркер билдера — тесты с `httptest`-фейком билдера (`internal/builder`).
 
 ## 11. Документация
 
@@ -199,7 +185,6 @@ log:
 
 - `README.md` — обзор, быстрый старт;
 - `docs/architecture.md` — компоненты, маршрутизация, схема запросов;
-- `docs/frontend-update.md` — цикл обновления, создание патчей, разрешение конфликтов;
 - `docs/configuration.md` — все ключи конфига;
 - `docs/observability.md` — подключение к VictoriaMetrics;
 - `docs/deploy.md` — пример reverse-proxy (Caddy/nginx).
@@ -212,5 +197,5 @@ log:
 
 - Новый внешний сервис = новый модуль-префикс (`/tmdb/`, ...) с тем же интерфейсом (`name`, `upstream`, свои перехваты) либо отдельный микросервис со своим поддоменом — при конфликте путей или потребности разделения нагрузки (транскодинг).
 - Заглушки постепенно заменяются собственной реализацией (аккаунт, bookmarks, timeline, storage) на базе `internal/storage`.
-- Платформенные сборки (webOS, Tizen, MSX) добавляются без изменения фундамента: общие патчи `src/` действуют на все платформы, в пайплайн обновления добавляются gulp-таски (`pack_webos`, `pack_tizen`), плюс точечный патч `index/<платформа>/loader.js` на наш домен; при необходимости — модуль упаковки `lg.ipk`/`samsung.wgt` на стороне сервера.
+- Платформенные сборки (webOS, Tizen, MSX) добавляются без изменения фундамента: общие патчи `src/` (репозиторий билдера) действуют на все платформы, в пайплайн билдера добавляются gulp-таски (`pack_webos`, `pack_tizen`), плюс точечный патч `index/<платформа>/loader.js` на наш домен; при необходимости — модуль упаковки `lg.ipk`/`samsung.wgt` на стороне сервера.
 - WebSocket-сокет, WAF-лимиты, кеш прокси — кандидаты в последующие итерации.
