@@ -1,14 +1,15 @@
 # lampa-go configuration example.
-# Copy to config.yaml and adjust. All keys except `server.base_domain`
-# have built-in defaults (base_domain is empty by default; it is required
-# when builder.enabled is true, where it is the build domain). When
-# builder.enabled is true, builder.api_key is required too. Unknown keys
+# Copy to config.yaml and adjust. All keys have built-in defaults except
+# `server.base_domain` and `builder.api_key`: both are required while
+# `builder.enabled` is true, which is the default (the builder is the only
+# frontend source; disable it only for local runs without one). Unknown keys
 # are rejected at startup (strict parsing).
 
 server:
   listen: ":8080"            # address to listen on (behind a reverse proxy)
-  static_dir: ./deploy/web   # built frontend; with builder.enabled use ./deploy/web/current (a symlink path)
-  base_domain: lampa.example.com  # our public domain (used by frontend patches)
+  static_dir: ./deploy/web/current  # symlink path managed by the builder worker;
+                                    # versions live in <static_dir>/../versions/
+  base_domain: lampa.example.com    # our public domain; the build domain
 
 cub:
   upstream: https://cub.example # upstream the /cub/* requests are forwarded to (built-in default: see internal/config)
@@ -18,7 +19,8 @@ cub:
   subdomain_markers: ["tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"]
 
 builder:
-  enabled: false             # enable the lampa-web-builder update worker
+  enabled: true              # the only frontend source; set false only for
+                             # local runs without a builder (smoke, debugging)
   url: http://builder:8080   # builder API (compose service name; loopback: http://127.0.0.1:8081)
   api_key: change-me         # X-API-Key for the builder (required when enabled)
   poll_interval: 5m          # how often to compare available_commit with ours

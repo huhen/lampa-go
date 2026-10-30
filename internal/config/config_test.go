@@ -3,12 +3,16 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestDefaultsAreValid(t *testing.T) {
 	cfg := Defaults()
+	// Builder is enabled by default: api_key and base_domain become required.
+	cfg.Builder.APIKey = "test-key"
+	cfg.Server.BaseDomain = "lampa.example.com"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("defaults must be valid: %v", err)
 	}
@@ -43,6 +47,8 @@ db:
   driver: postgres
   dsn: postgres://localhost/lampa
   max_open_conns: 10
+builder:
+  api_key: test-key
 log:
   format: json
 `
@@ -81,12 +87,11 @@ func TestLoadEmptyFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("%s: Load: %v", name, err)
-		}
-		if cfg.Server.Listen != ":8080" {
-			t.Errorf("%s: listen = %q, want :8080", name, cfg.Server.Listen)
+		// Defaults survive an empty file, but they no longer validate without
+		// builder.api_key: the failure must be validation, not parsing.
+		_, err := Load(path)
+		if err == nil || !strings.Contains(err.Error(), "builder.api_key") {
+			t.Errorf("%s: expected builder.api_key validation error, got %v", name, err)
 		}
 	}
 }
@@ -135,6 +140,9 @@ func TestValidateRejectsBadValues(t *testing.T) {
 	}
 	for i, breakFn := range cases {
 		cfg := Defaults()
+		// Keep the builder valid so the intended break is what fails validation.
+		cfg.Builder.APIKey = "k"
+		cfg.Server.BaseDomain = "lampa.example.com"
 		breakFn(&cfg)
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("case %d: expected validation error", i)
@@ -144,8 +152,11 @@ func TestValidateRejectsBadValues(t *testing.T) {
 
 func TestBuilderDefaults(t *testing.T) {
 	cfg := Defaults()
-	if cfg.Builder.Enabled {
-		t.Error("builder must be disabled by default")
+	if !cfg.Builder.Enabled {
+		t.Error("builder must be enabled by default")
+	}
+	if cfg.Server.StaticDir != "./deploy/web/current" {
+		t.Errorf("static_dir = %q, want ./deploy/web/current", cfg.Server.StaticDir)
 	}
 	if cfg.Builder.URL != "http://builder:8080" {
 		t.Errorf("builder url = %q, want http://builder:8080", cfg.Builder.URL)
@@ -156,8 +167,14 @@ func TestBuilderDefaults(t *testing.T) {
 	if cfg.Builder.KeepVersions != 3 {
 		t.Errorf("keep_versions = %d, want 3", cfg.Builder.KeepVersions)
 	}
+	// Enabled by default: api_key and base_domain become required.
+	if err := cfg.Validate(); err == nil {
+		t.Error("defaults must not validate without builder.api_key")
+	}
+	cfg.Builder.APIKey = "k"
+	cfg.Server.BaseDomain = "lampa.example.com"
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("defaults must be valid: %v", err)
+		t.Fatalf("must validate with api_key and base_domain: %v", err)
 	}
 }
 

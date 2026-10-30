@@ -105,7 +105,7 @@ type Config struct {
 // Defaults returns the built-in default configuration.
 func Defaults() Config {
 	return Config{
-		Server: Server{Listen: ":8080", StaticDir: "./deploy/web"},
+		Server: Server{Listen: ":8080", StaticDir: "./deploy/web/current"},
 		Cub: Cub{
 			Upstream:         "https://cub.best",
 			Timeout:          Duration(15 * time.Second),
@@ -114,6 +114,7 @@ func Defaults() Config {
 			SubdomainMarkers: []string{"tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"},
 		},
 		Builder: Builder{
+			Enabled:      true,
 			URL:          "http://builder:8080",
 			PollInterval: Duration(5 * time.Minute),
 			KeepVersions: 3,
