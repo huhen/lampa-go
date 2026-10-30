@@ -4,7 +4,7 @@
 
 **lampa-go** — Go-сервер, который хостит веб-интерфейс [Lampa](https://github.com/yumata/lampa-source) (собирается сервисом [lampa-web-builder](https://github.com/huhen/lampa-web-builder)) и реализует скелет API **cub** по схеме «свой ответ / прокси». Это переработка (порт) C#-проекта [lampac](https://github.com/immisteriou/lampac), который остаётся образцом конечного результата.
 
-Идея — **один домен**: сайт обращается только к нам, больше ничего настраивать на клиентах не нужно. Часть ручек cub API сервер отвечает сам (заглушки: checker, blacklist, metric, ads, geo), остальное прозрачно проксируется на настраиваемый upstream (`cub.upstream`; встроенный дефолт — см. `Defaults()` в `internal/config/config.go`).
+Идея — **один домен**: сайт обращается только к нам, больше ничего настраивать на клиентах не нужно. Часть ручек cub API сервер отвечает сам (заглушки: checker, blacklist, metric, ad, geo), остальное прозрачно проксируется на настраиваемый upstream (`cub.upstream`; встроенный дефолт — см. `Defaults()` в `internal/config/config.go`).
 
 ## Возможности
 
@@ -30,7 +30,7 @@ docker compose up -d                 # builder + lampa-go
 
 ### Бинарник на хосте
 
-Требования: **Go 1.27+**. Билдер поднимается отдельно: `docker compose up -d builder`; в `config.yaml` при этом `builder.url: http://127.0.0.1:8081` и в `docker-compose.yml` раскомментирована loopback-публикация порта билдера.
+Требования: **Go 1.27+**. Билдер поднимается отдельно: `docker compose up -d builder`; в `config.yaml` при этом `builder.url: http://127.0.0.1:8081` и в `docker-compose.yml` раскомментируйте loopback-публикацию порта билдера.
 
 ```bash
 cp config.example.yaml config.yaml   # builder.api_key, server.base_domain
