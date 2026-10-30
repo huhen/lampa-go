@@ -1,0 +1,112 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+# A new push to a PR branch supersedes the previous run of the same branch;
+# main and tag runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  # The distroless image has no shell: the runtime user is asserted via
+  # docker inspect, volume ownership — from a side alpine container.
+  image-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the image
+        run: docker build -t lampa-go:ci .
+      - name: Image runs as nonroot
+        run: |
+          set -euo pipefail
+          user=$(docker inspect -f '{{.Config.User}}' lampa-go:ci)
+          echo "user=$user"
+          test "$user" = "65532:65532"
+      - name: Server starts, answers /healthz, owns the volume
+        run: |
+          set -euo pipefail
+          dir=$(mktemp -d)
+          printf 'server:\n  listen: ":8080"\n  static_dir: /var/lib/lampa-go/web/current\nbuilder:\n  enabled: false\ndb:\n  dsn: /var/lib/lampa-go/lampa-go.db\n' > "$dir/config.yaml"
+          docker volume create lg-ci
+          trap 'docker rm -f lg-ci-run >/dev/null 2>&1 || true; docker volume rm lg-ci >/dev/null 2>&1 || true' EXIT
+          docker run --rm -d --name lg-ci-run \
+            -v lg-ci:/var/lib/lampa-go \
+            -v "$dir/config.yaml:/etc/lampa-go/config.yaml:ro" \
+            -p 127.0.0.1:18081:8080 lampa-go:ci
+          curl -sf --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:18081/healthz
+          # A fresh named volume inherits the owner of the image directory.
+          owner=$(docker run --rm -v lg-ci:/vol alpine stat -c %u /vol)
+          test "$owner" = 65532
+
+  # Every merge to main publishes an image: main (moving) and sha-<short>
+  # (pinned). Release tags keep version tags and latest.
+  docker-main:
+    if: github.ref == 'refs/heads/main'
+    needs: [test, image-smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ghcr.io/huhen/lampa-go
+          tags: |
+            type=raw,value=main
+            type=sha
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, image-smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ghcr.io/huhen/lampa-go
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
