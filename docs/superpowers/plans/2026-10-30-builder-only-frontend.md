@@ -24,9 +24,13 @@
 
 ```bash
 cd /home/usr1/coding/lampa-go
-rm -rf frontend docs/superpowers/plans
+rm -rf frontend
+rm docs/superpowers/plans/2026-10-07-lampa-go-first-iteration.md \
+   docs/superpowers/plans/2026-10-07-builder-integration.md
 rm scripts/update-frontend.sh docs/frontend-update.md
 ```
+
+(Текущий план `2026-10-30-builder-only-frontend.md` в `docs/superpowers/plans/` **не удалять** — только два старых файла.)
 
 - [ ] **Step 2: Переписать Makefile без fe-целей**
 
