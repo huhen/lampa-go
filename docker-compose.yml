@@ -1,8 +1,7 @@
-# The lampa-web-builder side of the deployment (spec §12 of the builder repo:
-# github.com/huhen/lampa-web-builder, docs/superpowers/specs/).
-# lampa-go itself is containerized separately; until then it reaches the
-# builder via the published loopback port (commented out below) and, once
-# containerized, via the compose network service name (builder.url: http://builder:8080).
+# Полный стек: билдер фронта + lampa-go
+# (спек: docs/superpowers/specs/2026-10-30-builder-only-frontend-design.md).
+# Ключи — в .env (шаблон .env.example); конфиг lampa-go — ./config.yaml
+# (шаблон config.example.yaml; контейнерные пути — docs/deploy.md, раздел compose).
 services:
   builder:
     image: ghcr.io/huhen/lampa-web-builder:latest
@@ -14,8 +13,18 @@ services:
       API_KEY: ${BUILDER_API_KEY:?set BUILDER_API_KEY in .env}
       DEFAULT_DOMAIN: ${BUILDER_DEFAULT_DOMAIN:?set BUILDER_DEFAULT_DOMAIN in .env}
       POLL_INTERVAL: "6h"
-    # Until lampa-go runs in this compose network, publish on loopback only:
-    # ports:
-    #   - "127.0.0.1:8081:8080"
+    # Порт наружу не публикуется: builder доступен только внутри сети compose
+    # по имени сервиса.
+  lampa-go:
+    image: ghcr.io/huhen/lampa-go:latest
+    restart: unless-stopped
+    depends_on:
+      - builder
+    ports:
+      - "127.0.0.1:8080:8080"   # за reverse proxy
+    volumes:
+      - ./config.yaml:/etc/lampa-go/config.yaml:ro
+      - lampa-data:/var/lib/lampa-go
 volumes:
   builder-data:
+  lampa-data:
