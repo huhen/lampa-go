@@ -137,8 +137,8 @@ cub:
   geo_default: US
   subdomain_markers: ["tmdb", "geo", "ws", "imagetmdb", "cdn", "ad"]
 builder:
-  url: http://builder:8080           # lampa-web-builder API
-  api_key: <ключ>                    # обязателен при builder.enabled (по умолчанию true)
+  url: http://builder:8080          # lampa-web-builder API
+  api_key: <ключ>                   # обязателен при builder.enabled (по умолчанию true)
 db:
   driver: sqlite                    # sqlite | postgres
   dsn: ./data/lampa-go.db
@@ -169,7 +169,7 @@ log:
 
 - `Open(cfg) (*sql.DB, error)`: `sqlite` → `modernc.org/sqlite` (pure Go, кросс-компиляция без cgo; WAL, `MaxOpenConns(1)` — single writer), `postgres` → `jackc/pgx/v5` stdlib-режим; пул `database/sql` настраивается из конфига (`max_open_conns`, `max_idle_conns`, `conn_max_lifetime`).
 - Миграции: `pressly/goose/v3`, `//go:embed migrations/*.sql`, `goose.Up` при старте.
-- Первая миграция `00001_init.sql`: `app_meta(key TEXT PRIMARY KEY, value TEXT)` — проверка пайплайна на обоих драйверах. Схемы аккаунтов/закладок — будущие итерации.
+- Первая миграция `00001_init.sql`: `app_meta(key TEXT PRIMARY KEY, value TEXT)` — версия схемы и ключ `builder.deployed_commit`, проверка на обоих драйверах. Схемы аккаунтов/закладок — будущие итерации.
 - `/readyz` пингует БД.
 
 ## 10. Тестирование
