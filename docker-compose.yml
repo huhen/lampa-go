@@ -1,0 +1,21 @@
+# The lampa-web-builder side of the deployment (spec §12 of the builder repo:
+# github.com/huhen/lampa-web-builder, docs/superpowers/specs/).
+# lampa-go itself is containerized separately; until then it reaches the
+# builder via the published loopback port (commented out below) and, once
+# containerized, via the compose network service name (builder.url: http://builder:8080).
+services:
+  builder:
+    image: ghcr.io/huhen/lampa-web-builder:latest
+    restart: unless-stopped
+    volumes:
+      - builder-data:/data
+    environment:
+      LISTEN: ":8080"
+      API_KEY: ${BUILDER_API_KEY:?set BUILDER_API_KEY in .env}
+      DEFAULT_DOMAIN: ${BUILDER_DEFAULT_DOMAIN:?set BUILDER_DEFAULT_DOMAIN in .env}
+      POLL_INTERVAL: "6h"
+    # Until lampa-go runs in this compose network, publish on loopback only:
+    # ports:
+    #   - "127.0.0.1:8081:8080"
+volumes:
+  builder-data:

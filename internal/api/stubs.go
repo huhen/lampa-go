@@ -1,0 +1,96 @@
+package api
+
+import (
+	"io"
+	"mime"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+const maxCheckerBody = 1 << 20
+
+// checker answers the Lampa mirror liveness probe locally:
+// GET returns "ok", POST echoes back the URL-decoded first form value.
+func checker(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.Method != http.MethodPost {
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mt != "application/x-www-form-urlencoded" {
+		http.Error(w, "error", http.StatusBadRequest)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCheckerBody))
+	if err != nil {
+		http.Error(w, "error", http.StatusBadRequest)
+		return
+	}
+	raw := string(body)
+	i := strings.IndexByte(raw, '=')
+	if i < 0 {
+		http.Error(w, "error", http.StatusBadRequest)
+		return
+	}
+	value := raw[i+1:]
+	if j := strings.IndexByte(value, '&'); j >= 0 {
+		value = value[:j]
+	}
+	// The body is form-urlencoded: the client compares the reply against the
+	// original (decoded) value, so undo the encoding before echoing.
+	decoded, err := url.QueryUnescape(value)
+	if err != nil {
+		http.Error(w, "error", http.StatusBadRequest)
+		return
+	}
+	_, _ = w.Write([]byte(decoded))
+}
+
+// blacklist returns an empty plugin blacklist.
+func blacklist(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, []any{})
+}
+
+// metric accepts client metrics and returns an empty success.
+func metric(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]any{"secuses": true})
+}
+
+// ads serves empty advertisement payloads so the client shows nothing.
+//
+// The real frontend (upstream vast_manager.js) asks /api/ad/get/<api>, not
+// only /vast; both must answer the vast-shaped payload, otherwise the client
+// logs "wrong format" and cycles mirrors. Other ad paths keep the minimal
+// {"secuses":true} answer.
+func ads(w http.ResponseWriter, r *http.Request) {
+	rest := r.PathValue("rest")
+	if rest == "vast" || strings.HasPrefix(rest, "get") {
+		now := time.Now()
+		writeJSON(w, map[string]any{
+			"secuses":       true,
+			"ad":            []any{},
+			"day_of_month":  now.Day(),
+			"days_in_month": 31,
+			"month":         int(now.Month()),
+		})
+		return
+	}
+	writeJSON(w, map[string]any{"secuses": true})
+}
+
+// geo returns the client country code taken from the reverse-proxy header.
+func geo(header, fallback string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		country := strings.TrimSpace(r.Header.Get(header))
+		if country == "" {
+			country = fallback
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write([]byte(country))
+	}
+}
