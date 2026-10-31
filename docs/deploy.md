@@ -125,12 +125,15 @@ docker compose up -d
 
 ### compose
 
-`docker-compose.yml` в корне репозитория поднимает полный стек: `builder`
+`compose.yaml` в корне репозитория поднимает полный стек: `builder`
 (порт наружу не публикуется, доступен по имени сервиса `builder`) и `lampa-go`
-(`127.0.0.1:8080` за reverse-proxy). Ключи — в `.env` (шаблон `.env.example`):
+(публикуется на `LAMPA_GO_ADDR` из `.env`, по умолчанию `0.0.0.0:3080` —
+reverse-proxy на отдельной машине). Ключи — в `.env` (шаблон `.env.example`):
 `BUILDER_API_KEY` должен совпадать с `builder.api_key` в `config.yaml`,
 `BUILDER_DEFAULT_DOMAIN` — с `server.base_domain`. Конфиг монтируется
-read-only, данные (БД + версии фронта) живут в volume `lampa-data`.
+read-only, данные живут в bind-каталогах рядом с compose-файлом:
+`./data/builder` (данные билдера) и `./data/lampa-go` (БД + версии фронта);
+каталоги должны быть доступны на запись uid контейнеров (10001 / 65532).
 
 Контейнерный `config.yaml` (пути — внутри контейнера):
 

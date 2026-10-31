@@ -3,12 +3,14 @@
 # Keys live in .env (template: .env.example); lampa-go config is ./config.yaml
 # (template: config.example.yaml; container paths — docs/deploy.md, compose section).
 # Before the first `docker compose up`: cp .env.example .env && cp config.example.yaml config.yaml
+# Data lives in bind dirs ./data/* (gitignored); they must be writable by the
+# container uid (builder: 10001, lampa-go: 65532), e.g. `chmod 777 data/*`.
 services:
   builder:
     image: ghcr.io/huhen/lampa-web-builder:latest
     restart: unless-stopped
     volumes:
-      - builder-data:/data
+      - ./data/builder:/data
     environment:
       LISTEN: ":8080"
       API_KEY: ${BUILDER_API_KEY:?set BUILDER_API_KEY in .env}
@@ -24,10 +26,9 @@ services:
     depends_on:
       - builder
     ports:
-      - "127.0.0.1:8080:8080"   # behind a reverse proxy
+      # Host bind addr:port for the published UI/API (from .env). Default
+      # 0.0.0.0:3080 — the reverse proxy runs on a separate host.
+      - "${LAMPA_GO_ADDR:-0.0.0.0:3080}:8080"
     volumes:
       - ./config.yaml:/etc/lampa-go/config.yaml:ro
-      - lampa-data:/var/lib/lampa-go
-volumes:
-  builder-data:
-  lampa-data:
+      - ./data/lampa-go:/var/lib/lampa-go

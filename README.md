@@ -32,7 +32,7 @@ docker compose up -d                 # builder + lampa-go
 
 ### Бинарник на хосте
 
-Требования: **Go 1.27+**. Билдер поднимается отдельно: `cp .env.example .env` (compose требует `BUILDER_API_KEY`), затем `docker compose up -d builder`; в `config.yaml` при этом `builder.url: http://127.0.0.1:8081`, а сервису `builder` в `docker-compose.yml` добавьте публикацию порта на loopback: `ports: ["127.0.0.1:8081:8080"]`.
+Требования: **Go 1.27+**. Билдер поднимается отдельно: `cp .env.example .env` (compose требует `BUILDER_API_KEY`), затем `docker compose up -d builder`; в `config.yaml` при этом `builder.url: http://127.0.0.1:8081`, а сервису `builder` в `compose.yaml` добавьте публикацию порта на loopback: `ports: ["127.0.0.1:8081:8080"]`.
 
 ```bash
 cp config.example.yaml config.yaml   # builder.api_key, server.base_domain
