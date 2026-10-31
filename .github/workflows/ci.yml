@@ -51,7 +51,7 @@ jobs:
             -v lg-ci:/var/lib/lampa-go \
             -v "$dir/config.yaml:/etc/lampa-go/config.yaml:ro" \
             -p 127.0.0.1:18081:8080 lampa-go:ci
-          curl -sf --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:18081/healthz
+          curl -sf --retry 10 --retry-connrefused --retry-all-errors --retry-delay 1 http://127.0.0.1:18081/healthz
           # A fresh named volume inherits the owner of the image directory.
           owner=$(docker run --rm -v lg-ci:/vol alpine stat -c %u /vol)
           test "$owner" = 65532
